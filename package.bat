@@ -13,6 +13,8 @@ REM    exe 一启动就 0xc0000005 崩溃。打包前临时移走这些 DLL，让 exe 改用系统运行
 REM    打包结束（无论成败）再还原，不影响原 Python 环境。
 REM 4. 仅依赖 PyQt5 + Python 标准库，打包后 exe 约 100MB 出头，启动快、体积小。
 REM 5. 打包前请先安装：pip install pyinstaller PyQt5 PyQtWebEngine
+REM 6. 图标文件 application-note.ico 必须与本脚本同目录：--icon 决定 exe 图标，
+REM    --add-data 把图标打进 exe 供程序运行时加载，两者缺一都会导致图标错误。
 
 REM ---- 自动定位同时具备 PyQt5 与 PyInstaller 的 Python ----
 set "BUILD_PYTHON="
@@ -54,8 +56,20 @@ if defined QTBIN (
 if "%RESTORE_DLLS%"=="1" echo 已临时移走 PyQt5 自带 VC++ 运行库（稍后还原）
 
 REM ---- 执行打包 --clean 清空缓存，确保成功 ----
+REM ---- 检查图标文件（缺失会打出无图标的 exe）----
+if not exist "application-note.ico" (
+    echo [ERROR] 缺少图标文件 application-note.ico，请与本脚本放在同一目录
+    pause
+    exit /b 1
+)
+
+REM ---- 执行打包 ----
+REM --icon       : 作为 exe 文件图标（资源管理器/任务栏显示）
+REM --add-data   : 把 ico 打进 exe，程序运行时才能加载窗口图标
 "%BUILD_PYTHON%" -m PyInstaller --clean --onefile --windowed --noconsole ^
 --name "异色逮捕计划" ^
+--icon "application-note.ico" ^
+--add-data "application-note.ico;." ^
 automation_app.py
 set "BUILD_RC=%errorlevel%"
 

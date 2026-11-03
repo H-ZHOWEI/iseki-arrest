@@ -5,7 +5,7 @@ a = Analysis(
     ['automation_app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('application-note.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['application-note.ico'],
 )

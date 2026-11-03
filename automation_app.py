@@ -4678,6 +4678,30 @@ def getDefaultSeasons():
     ]
 
 
+# ----------------------------- 资源路径 ---------------------------------
+def resource_path(name):
+    """获取随程序分发的资源文件绝对路径。
+
+    兼容两种运行方式：
+      1. PyInstaller 打包后（onefile）：资源被解包到 sys._MEIPASS 临时目录；
+      2. 源码直接运行：资源与本文件同目录。
+    另外再兜底到「exe 所在目录」，方便用户把 ico 放在 exe 旁边使用。
+    """
+    candidates = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidates.append(os.path.join(base, name))
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), name))
+    else:
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), name))
+    candidates.append(os.path.join(os.getcwd(), name))
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return candidates[-1]
+
+
 # ----------------------------- 主程序 ---------------------------------
 def main():
     app = QtWidgets.QApplication(sys.argv)
@@ -4692,9 +4716,12 @@ def main():
     view.setMinimumSize(1000, 700)
     view.resize(1100, 800)
     
-    icon_path = "application-note.ico"
-    if os.path.exists(icon_path):
-        view.setWindowIcon(QIcon(icon_path))
+    icon_path = resource_path("application-note.ico")
+    app_icon = QIcon(icon_path)
+    if not app_icon.isNull():
+        # 同时设置应用级图标，任务栏 / Alt+Tab / 窗口标题栏才不会显示默认图标
+        app.setWindowIcon(app_icon)
+        view.setWindowIcon(app_icon)
     
     tmp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8')
     html = HTML_CONTENT.replace("__APP_VERSION__", APP_VERSION)
