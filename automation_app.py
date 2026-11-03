@@ -4272,7 +4272,14 @@ def fetch_github_release(repo):
         api_url = repo
     else:
         api_url = "https://api.github.com/repos/%s/releases/latest" % repo.strip('/')
-    rel = http_get_json(api_url, timeout=15)
+    try:
+        rel = http_get_json(api_url, timeout=15)
+    except urllib.error.HTTPError as e:
+        # 404 = 该仓库还没有任何 Release（或仓库不存在），属正常状态，
+        # 返回 None 交由上层提示“暂无发布版本/已是最新”，而不是当成错误。
+        if e.code == 404:
+            return None
+        raise
     if not rel or rel.get("message") in ("Not Found",) or "tag_name" not in rel:
         return None
     tag = str(rel.get("tag_name", "")).lstrip('vV')
@@ -4433,7 +4440,7 @@ class PythonAPI(QObject):
 
     # ----------------------------- 自动更新相关 -----------------------------
     @pyqtSlot(str)
-    def checkUpdate(self, source):
+    def checkUpdate(self, source_url):
         """检查更新（后台线程，结果经 onUpdateChecked 回调）。
         source 支持两种形式：
           - GitHub 仓库 'owner/repo'（或完整 releases/latest 地址）→ 走 Releases API；
@@ -4441,7 +4448,7 @@ class PythonAPI(QObject):
         def _run():
             result = {"status": "noupdate", "message": ""}
             try:
-                source = (source or "").strip()
+                source = (source_url or "").strip()
                 if not source:
                     result = {"status": "noupdate", "message": "未配置更新来源"}
                 elif re.match(r'^[\w.\-]+/[\w.\-]+$', source) or 'github.com' in source.lower():
