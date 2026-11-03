@@ -1,23 +1,28 @@
 @echo off
-chcp 65001 > nul
-:: ============================================================
-::  å¼‚è‰²é€®æ•è®¡åˆ’ â€”â€” é«˜çº§æ‰“åŒ…è„šæœ¬
-:: ============================================================
-:: è¯´æ˜ï¼š
-:: 1. OCR è¯†åˆ«åŠŸèƒ½ï¼ˆè¯†åˆ«å…¬å‘Šå›¾å¼‚è‰²ç²¾çµï¼‰çš„ä¾èµ–æ˜¯ã€Œå‡½æ•°å†…æƒ°æ€§å¯¼å…¥ã€ï¼Œ
-::    PyInstaller é™æ€æ‰«ææŠ“ä¸åˆ°ï¼Œå¿…é¡»ç”¨ä¸‹é¢çš„ --hidden-import / --collect-* æ˜¾å¼å£°æ˜ï¼Œ
-::    å¦åˆ™æ‰“åŒ…åçš„ exe ä¸€è°ƒç”¨è¯†åˆ«å°±ä¼š ModuleNotFoundError å´©æºƒã€‚
-:: 2. é»˜è®¤åªæ‰“åŒ… PaddleOCRï¼ˆä¸»è¯†åˆ«å¼•æ“ï¼‰+ å…¶ C æ‰©å±•ä¾èµ–ï¼Œä½“ç§¯å¯æ§ï¼ˆexe çº¦æ•°ç™¾ MBï¼‰ã€‚
-::    easyocr / tesseract ä½œä¸ºå…œåº•å¼•æ“ã€é»˜è®¤ä¸æ‰“åŒ…ã€‘ï¼ˆè§ä¸‹æ–¹æ³¨é‡Šï¼‰ï¼Œå› ä¸º easyocr ä¼š
-::    æ‹‰å…¥ torchï¼ˆé¢å¤–çº¦ 700MB+ï¼‰ã€‚è‹¥ç¡®å®éœ€è¦å…œåº•å¼•æ“ä¹Ÿæ‰“è¿› exeï¼Œå–æ¶ˆå¯¹åº”æ³¨é‡Šè¡Œå³å¯ã€‚
-:: 3. PaddleOCR / easyocr é¦–æ¬¡è¿è¡Œä¼šè‡ªåŠ¨è”ç½‘ä¸‹è½½æ¨¡å‹åˆ°ç”¨æˆ·ç¼“å­˜ç›®å½•ï¼ˆ~/.paddleocr ç­‰ï¼‰ï¼Œ
-::    åªéœ€è”ç½‘ä¸€æ¬¡ï¼Œä¹‹åç¦»çº¿å¯ç”¨ã€‚
-:: 4. æ‰“åŒ…ç¯å¢ƒéœ€å…ˆï¼špip install pyinstaller pillow paddleocr paddlepaddle
-::    ï¼ˆå¯é€‰å…œåº•ï¼‰pip install easyocr  /  pip install pytesseract å¹¶å®‰è£… Tesseract-OCR
-:: ============================================================
+cd /d "%~dp0"
+REM ============================================================
+REM  ÒìÉ«´ş²¶¼Æ»® ´ò°ü½Å±¾ (PyInstaller onefile)
+REM ============================================================
+REM ËµÃ÷£º
+REM 1. OCR Ê¶±ğ¹¦ÄÜµÄÒÀÀµÊÇº¯ÊıÄÚ¶èĞÔµ¼Èë£¬PyInstaller ¾²Ì¬É¨Ãè×¥²»µ½£¬
+REM    ±ØĞëÓÃ --hidden-import / --collect-* ÏÔÊ½ÉùÃ÷£¬·ñÔò´ò°üºóµÄ exe Ò»µ÷ÓÃÊ¶±ğ¾Í±¨ ModuleNotFoundError¡£
+REM 2. Ä¬ÈÏÖ»´ò°ü PaddleOCR Ö÷ÒıÇæ + Æä C À©Õ¹ÒÀÀµ£¬Ìå»ıÔ¼Êı°Ù MB¡£
+REM    easyocr / tesseract ¶µµ×ÒıÇæ¡¾Ä¬ÈÏ²»´ò°ü¡¿£¨¼ûÎÄ¼şÄ©Î²×¢ÊÍ£©£¬±ÜÃâÀ­Èë torch Ô¼ 700MB+¡£
+REM 3. PaddleOCR Ê×´ÎÔËĞĞ»áÁªÍøÏÂÔØÄ£ĞÍµ½ÓÃ»§»º´æÄ¿Â¼(~/.paddleocr)£¬Ö»ĞèÁªÍøÒ»´Î£¬Ö®ºóÀëÏß¿ÉÓÃ¡£
+REM 4. ´ò°üÇ°ÇëÏÈ°²×°£ºpip install pyinstaller pillow paddleocr paddlepaddle
+REM    £¨¿ÉÑ¡¶µµ×£©pip install easyocr  »ò  pip install pytesseract ²¢°²×° Tesseract-OCR
 
-pyinstaller --onefile --windowed --noconsole ^
---name "å¼‚è‰²é€®æ•è®¡åˆ’" ^
+REM ¼ì²é pyinstaller ÊÇ·ñ¿ÉÓÃ
+where pyinstaller > nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Î´ÕÒµ½ pyinstaller£¬ÇëÏÈÖ´ĞĞ£ºpip install pyinstaller
+    pause
+    exit /b 1
+)
+
+REM Ö´ĞĞ´ò°ü£¨--clean ÇåÀí»º´æ£¬±ÜÃâ¾É¹¹½¨¸ÉÈÅ£©
+pyinstaller --clean --onefile --windowed --noconsole ^
+--name "ÒìÉ«´ş²¶¼Æ»®" ^
 --hidden-import paddleocr ^
 --hidden-import paddle ^
 --hidden-import cv2 ^
@@ -32,17 +37,24 @@ pyinstaller --onefile --windowed --noconsole ^
 --collect-submodules paddle ^
 --collect-binaries paddle ^
 --collect-submodules paddleocr ^
---collect-data-files paddleocr ^
+--collect-data paddleocr ^
 --hidden-import pytesseract ^
 automation_app.py
 
-:: ===== å¯é€‰ï¼šæŠŠ easyocr å…œåº•å¼•æ“ä¹Ÿæ‰“è¿› exeï¼ˆä¼šé¢å¤–å¼•å…¥ torchï¼Œä½“ç§¯å¤§å¢ï¼‰=====
-:: å–æ¶ˆä¸‹é¢ä¸¤è¡Œæ³¨é‡Šå³å¯å¯ç”¨ï¼š
-:: --hidden-import easyocr ^
-:: --collect-submodules easyocr ^
+if errorlevel 1 (
+    echo [ERROR] ´ò°üÊ§°Ü£¬Çë²é¿´ÉÏ·½´íÎóĞÅÏ¢¡£
+    pause
+    exit /b 1
+)
 
-echo.
-echo æ„å»ºå®Œæˆï¼å¯æ‰§è¡Œæ–‡ä»¶ä½äº dist ç›®å½•ä¸‹
-echo æ–‡ä»¶åç§°ï¼šå¼‚è‰²é€®æ•è®¡åˆ’.exe
+REM Ğ£Ñé²úÎï
+if exist "dist\ÒìÉ«´ş²¶¼Æ»®.exe" (
+    echo.
+    echo ¹¹½¨Íê³É£¡¿ÉÖ´ĞĞÎÄ¼şÎ»ÓÚ dist Ä¿Â¼ÏÂ
+    echo ÎÄ¼şÃû³Æ£ºÒìÉ«´ş²¶¼Æ»®.exe
+) else (
+    echo [ERROR] Î´Éú³É dist\ÒìÉ«´ş²¶¼Æ»®.exe£¬Çë¼ì²éÉÏ·½ÈÕÖ¾¡£
+)
+
 echo.
 pause
