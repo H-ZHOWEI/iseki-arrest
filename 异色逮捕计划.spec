@@ -1,16 +1,27 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_submodules
+
+datas = []
+binaries = []
+hiddenimports = ['paddleocr', 'paddle', 'cv2', 'numpy', 'PIL', 'scipy', 'sklearn', 'shapely', 'skimage', 'pyclipper', 'lmdb', 'pytesseract']
+datas += collect_data_files('paddleocr')
+binaries += collect_dynamic_libs('paddle')
+hiddenimports += collect_submodules('paddle')
+hiddenimports += collect_submodules('paddleocr')
 
 
 a = Analysis(
     ['automation_app.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['tensorflow', 'paddlex', 'keras'],
     noarchive=False,
     optimize=0,
 )
