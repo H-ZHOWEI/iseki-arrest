@@ -33,7 +33,7 @@
 - 修复：周数计算改为向上取整（ceil）
 - 新增：用户当前升星材料数量，升星时自动检查并消耗
 - 新增：软件自动更新（检查更新 / 一键自更新，版本号语义化比对防止常见异常）
-- 版本：V1.3.0
+- 版本：V1.3.1
 """
 
 import sys
@@ -57,7 +57,7 @@ import urllib.request
 import urllib.error
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 DEFAULT_UPDATE_REPO = "H-ZHOWEI/iseki-arrest"  # 默认更新仓库（GitHub Releases）
 
 # ----------------------------- HTML 界面（前端逻辑）--------------------------------
@@ -4267,7 +4267,7 @@ def sha256_of_file(path):
 def fetch_github_release(repo):
     """从 GitHub Releases 获取最新版本的下载信息。
     repo 形如 'owner/repo' 或完整 releases/latest API 地址。
-    返回 {'version': '1.3.0', 'download_url': '...', 'notes': '...'} 或 None。"""
+    返回 {'version': '1.3.1', 'download_url': '...', 'notes': '...'} 或 None。"""
     if repo.startswith('http'):
         api_url = repo
     else:
