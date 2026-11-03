@@ -42,7 +42,7 @@ import os
 import json
 from pathlib import Path
 from PyQt5 import QtCore, QtWidgets, QtWebEngineWidgets
-from PyQt5.QtCore import QUrl, QObject, pyqtSlot
+from PyQt5.QtCore import QUrl, QObject, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWebChannel import QWebChannel
@@ -4337,10 +4337,22 @@ def apply_self_update(old_path, new_path):
 # ----------------------------- Python 后端（数据桥接与文件对话框）--------------------------------
 class PythonAPI(QObject):
     """供 JavaScript 调用的 Python 对象，实现文件导入导出及粘贴导入"""
-    
+
+    # 跨线程安全执行 JS：子线程 emit，主线程（本对象线程亲和性）接收后调用 runJavaScript。
+    # QWebEnginePage 非线程安全，绝不能在工作线程直接调用 runJavaScript，否则会段错误闪退。
+    sigRunJs = pyqtSignal(str)
+
     def __init__(self, view):
         super().__init__()
         self.view = view
+        self.sigRunJs.connect(self._runJs)
+
+    def _runJs(self, js):
+        """在主线程执行 JS（由 sigRunJs 排队调用）。"""
+        try:
+            self.view.page().runJavaScript(js)
+        except Exception:
+            pass
     
     @pyqtSlot(str)
     def exportWarehouse(self, dataStr):
@@ -4474,7 +4486,7 @@ class PythonAPI(QObject):
             except Exception as e:
                 result = {"status": "error", "message": "检查更新失败：%s" % e}
             try:
-                self.view.page().runJavaScript("onUpdateChecked(%s)" % json.dumps(result, ensure_ascii=False))
+                self.sigRunJs.emit("onUpdateChecked(%s)" % json.dumps(result, ensure_ascii=False))
             except Exception:
                 pass
         threading.Thread(target=_run, daemon=True).start()
@@ -4491,11 +4503,11 @@ class PythonAPI(QObject):
                 expected_sha = manifest.get("sha256", "")
                 if not download_url:
                     raise ValueError("manifest 缺少 download_url")
-                self.view.page().runJavaScript("onUpdateProgress(%d)" % 5)
+                self.sigRunJs.emit("onUpdateProgress(%d)" % 5)
                 fd, new_path = tempfile.mkstemp(suffix='.exe', prefix='iseki_new_')
                 os.close(fd)
                 http_download(download_url, new_path, timeout=300,
-                              progress_cb=lambda p: self.view.page().runJavaScript("onUpdateProgress(%d)" % max(5, p)))
+                              progress_cb=lambda p: self.sigRunJs.emit("onUpdateProgress(%d)" % max(5, p)))
                 # 基础校验：必须是 PE 可执行文件（以 MZ 开头），避免下载到错误页面
                 with open(new_path, 'rb') as f:
                     magic = f.read(2)
@@ -4505,13 +4517,13 @@ class PythonAPI(QObject):
                     actual = sha256_of_file(new_path)
                     if actual.lower() != expected_sha.lower():
                         raise ValueError("SHA256 校验不通过，文件可能被篡改或下载不完整")
-                self.view.page().runJavaScript("onUpdateProgress(100)")
+                self.sigRunJs.emit("onUpdateProgress(100)")
                 old_path = os.path.abspath(sys.executable)
-                self.view.page().runJavaScript("onUpdateDone()")
+                self.sigRunJs.emit("onUpdateDone()")
                 apply_self_update(old_path, new_path)
             except Exception as e:
                 try:
-                    self.view.page().runJavaScript(
+                    self.sigRunJs.emit(
                         "onUpdateError(%s)" % json.dumps({"message": str(e)}, ensure_ascii=False))
                 except Exception:
                     pass
