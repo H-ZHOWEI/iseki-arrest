@@ -58,7 +58,7 @@ import urllib.request
 import urllib.error
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 
@@ -1047,6 +1047,8 @@ id="externalLink">🔗 打开查询工具</a>
                 </div>
                 <div style="display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap;">
                     <button id="syncDataBtn" class="small">检查数据更新</button>
+                    <button id="testDataUrlBtn" class="small">测试地址</button>
+                    <button id="importDataPackBtn" class="small">从文件导入数据包</button>
                     <button id="exportDataPackBtn" class="small">导出数据包（发布用）</button>
                     <span id="dataSyncStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
                 </div>
@@ -4187,6 +4189,21 @@ id="externalLink">🔗 打开查询工具</a>
         if (sb) sb.onclick = function () { checkGameDataUpdates(false); };
         const eb = document.getElementById('exportDataPackBtn');
         if (eb) eb.onclick = function () { exportDataPack(); };
+        const ib = document.getElementById('importDataPackBtn');
+        if (ib) ib.onclick = function () {
+            if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
+            const st = document.getElementById('dataSyncStatus');
+            if (st) st.textContent = '正在读取本地数据包…';
+            pythonAPI.importDataPack();
+        };
+        const tb = document.getElementById('testDataUrlBtn');
+        if (tb) tb.onclick = function () {
+            if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
+            saveDataPackUrl();
+            const st = document.getElementById('dataSyncStatus');
+            if (st) st.textContent = '正在逐个测试地址（每个最多 8 秒）…';
+            pythonAPI.testDataPackUrls(getDataPackUrl());
+        };
         const du = document.getElementById('updateDataUrl');
         if (du) du.addEventListener('change', function () { saveDataPackUrl(); loadDataConfig(); });
         if (du) du.addEventListener('blur', function () { saveDataPackUrl(); loadDataConfig(); });
@@ -4213,6 +4230,69 @@ id="externalLink">🔗 打开查询工具</a>
 
     // 兼容旧按钮/旧调用
     function syncGameData(silent) { checkGameDataUpdates(!!silent); }
+
+    // 地址自检结果：逐条列出现在哪些地址能拉到数据包，点「用这个」直接写进「数据包直链」
+    function closeDataUrlTestModal() {
+        const old = document.getElementById('dataUrlTestModal');
+        if (old) old.remove();
+    }
+
+    function onDataUrlTested(res) {
+        closeDataUrlTestModal();
+        const results = (res && res.results) || [];
+        const okList = results.filter(function (r) { return r.ok; });
+        const st = document.getElementById('dataSyncStatus');
+        if (st) {
+            st.textContent = okList.length
+                ? ('可用 ' + okList.length + ' / ' + results.length + ' 条地址，点「用这个」可切换')
+                : '所有地址都不可用，请改用「从文件导入数据包」';
+        }
+
+        const rows = results.map(function (r) {
+            const m = String(r.url || '').match(/^https?:\/\/([^/]+)/);
+            const host = m ? m[1] : String(r.url || '').slice(0, 30);
+            const color = r.ok ? '#2b6e2f' : '#c23d2b';
+            const stateTxt = r.ok ? ('可用 · ' + r.ms + 'ms') : (r.msg || '失败');
+            const btn = r.ok
+                ? '<button class="small" data-url="' + escapeHtml(r.url) + '" style="flex:0 0 auto;">用这个</button>'
+                : '';
+            return '<div style="display:flex; align-items:center; gap:8px; padding:6px 0;'
+                + ' border-bottom:1px dashed #e6efda;">'
+                + '<div style="flex:1; min-width:0;">'
+                + '<div style="font-size:0.76rem; color:#2f4a24; word-break:break-all;">' + escapeHtml(host) + '</div>'
+                + '<div style="font-size:0.7rem; color:' + color + ';">' + escapeHtml(stateTxt) + '</div>'
+                + '</div>' + btn + '</div>';
+        }).join('');
+
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'dataUrlTestModal';
+        modal.innerHTML = '<div class="modal-content" style="max-width:520px;">'
+            + '<h3 style="margin-top:0;">数据包地址自检</h3>'
+            + '<p style="font-size:0.74rem; color:#5a7a4a; margin-top:0;">'
+            + '逐个尝试主地址与备用镜像，绿色表示当前网络能拉到。选一条可用的设为「数据包直链」即可。</p>'
+            + '<div style="max-height:280px; overflow:auto;">' + (rows || '<p>没有可测试的地址</p>') + '</div>'
+            + '<div style="display:flex; justify-content:flex-end; margin-top:12px;">'
+            + '<button id="closeTestModalBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
+            + ' color:#2b6e2f; border-radius:14px; padding:8px 16px; cursor:pointer; font-weight:600;">关闭</button>'
+            + '</div></div>';
+        document.body.appendChild(modal);
+        modal.querySelector('#closeTestModalBtn').onclick = closeDataUrlTestModal;
+
+        modal.querySelectorAll('button[data-url]').forEach(function (b) {
+            b.onclick = function () {
+                const u = b.getAttribute('data-url');
+                const inp = document.getElementById('updateDataUrl');
+                if (u === DEFAULT_DATA_URL) localStorage.removeItem('update_data_url');
+                else localStorage.setItem('update_data_url', u);
+                if (inp) inp.value = (u === DEFAULT_DATA_URL) ? '' : u;
+                loadDataConfig();
+                closeDataUrlTestModal();
+                const s2 = document.getElementById('dataSyncStatus');
+                if (s2) s2.textContent = '已切换数据包地址，点「检查数据更新」试试';
+            };
+        });
+    }
 
     // 差异检测：纯只读，判断远端数据包里有哪些本地还没有的赛季 / 精灵
     function diffGameData(pack) {
@@ -4252,14 +4332,18 @@ id="externalLink">🔗 打开查询工具</a>
         if (!res || res.status === 'error') {
             let msg = (res && res.message) ? res.message : '未知错误';
             if (msg.indexOf('数据同步失败') !== 0) msg = '数据同步失败：' + msg;
-            if (st) st.textContent = msg + '（可点「检查数据更新」重试）';
+            if (st) {
+                st.textContent = msg + '（可点「检查数据更新」重试，或点「从文件导入数据包」）';
+                st.title = msg;
+            }
             return;
         }
         const pack = res.pack || {};
         const remoteVer = String(pack.data_version || '');
         const localVer = localStorage.getItem(DATA_VERSION_KEY) || '';
         const verShow = remoteVer ? String(remoteVer).replace('T', ' ').slice(0, 10) : '';
-        const viaMirror = !!res.source && res.source !== getDataPackUrl();
+        const fromFile = String(res.source || '').indexOf('file:') === 0;
+        const viaMirror = !fromFile && !!res.source && res.source !== getDataPackUrl();
 
         if (remoteVer && remoteVer === skippedDataVersion) {
             if (st) st.textContent = '已跳过本次数据更新（下次启动会再提示）';
@@ -4274,7 +4358,8 @@ id="externalLink">🔗 打开查询工具</a>
             if (st) {
                 st.textContent = ((remoteVer && remoteVer !== localVer)
                     ? '数据已是最新（无新增赛季 / 精灵）' : '数据已是最新')
-                    + (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : '');
+                    + (fromFile ? '（来自本地文件）'
+                        : (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : ''));
             }
             return;
         }
@@ -4284,7 +4369,7 @@ id="externalLink">🔗 打开查询工具</a>
         if (st) {
             st.textContent = '发现新增 ' + diff.spirits.length + ' 个精灵、' + diff.seasons.length
                 + ' 个赛季，等待你确认…'
-                + (viaMirror ? '（经镜像获取）' : '');
+                + (fromFile ? '（来自本地文件）' : (viaMirror ? '（经镜像获取）' : ''));
         }
         showDataSyncDialog(diff, verShow);
     }
@@ -4611,16 +4696,44 @@ def compare_versions(a, b):
 
 
 def _mirror_urls(url):
-    """给 GitHub raw 直链生成备用镜像候选（国内 raw 常被卡到读超时）。
-    顺序即尝试顺序：jsDelivr CDN → gitmirror 代理。非 raw 链接返回空列表。"""
+    """给 GitHub raw 直链生成备用镜像候选（国内 raw 经常 502 / 读超时 / 被重置）。
+    顺序按实测可用性排列：github.com/raw（同源 302）→ jsDelivr fastly/cdn → ghproxy 类加速。
+    注意 raw.gitmirror.com 已废弃（DNS 无法解析），不再作为候选。非 raw 链接返回空列表。"""
     m = re.match(r'https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)', url or '')
     if not m:
         return []
     owner, repo, branch, path = m.groups()
+    raw = "https://raw.githubusercontent.com/%s/%s/%s/%s" % (owner, repo, branch, path)
     return [
+        "https://github.com/%s/%s/raw/%s/%s" % (owner, repo, branch, path),
+        "https://fastly.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path),
         "https://cdn.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path),
-        "https://raw.gitmirror.com/%s/%s/%s/%s" % (owner, repo, branch, path),
+        "https://ghproxy.net/%s" % raw,
+        "https://gh-proxy.com/%s" % raw,
+        "https://mirror.ghproxy.com/%s" % raw,
     ]
+
+
+def _host_of(url):
+    m = re.match(r'https?://([^/]+)', url or '')
+    return m.group(1) if m else (url or '')[:24]
+
+
+def _err_text(e):
+    if isinstance(e, urllib.error.HTTPError):
+        return "HTTP %s" % e.code
+    if isinstance(e, TimeoutError) or 'timed out' in str(e).lower():
+        return "读超时"
+    low = str(e).lower()
+    if 'getaddrinfo' in low or 'name or service not known' in low:
+        return "域名解析失败"
+    if '10054' in str(e) or 'forcibly closed' in low or 'connection reset' in low:
+        return "连接被重置"
+    if '10060' in str(e):
+        return "连接超时"
+    if '10061' in str(e) or 'refused' in low:
+        return "连接被拒绝"
+    return str(e)[:40]
 
 
 def http_get_json(url, timeout=15, retries=0, backoff=1.5):
@@ -4648,23 +4761,41 @@ def http_get_json(url, timeout=15, retries=0, backoff=1.5):
     raise last
 
 
-def http_get_json_multi(url, timeout=15):
-    """依次尝试主地址与备用镜像，返回 (json, 实际使用的地址)。
-    每个地址只尝试一次，避免用户等太久；主地址失败会立刻换镜像。"""
+def http_get_json_multi(url, timeout=12, max_candidates=None):
+    """依次尝试主地址与备用镜像，返回 (json, 实际命中的地址)。
+    - 主地址失败后会带 `_t=<时间戳>` 再试一次：GitHub 边缘节点缓存损坏时会固定返回 502，
+      换一个 query 参数即可绕开坏缓存（raw 会忽略该参数）。
+    - 镜像各试一次；max_candidates 可限制总尝试数，避免版本检查时等太久。
+    - 主地址 404 直接短路：仓库里就没有这个文件，镜像也不会有。"""
     candidates = [url] + _mirror_urls(url)
+    if max_candidates:
+        candidates = candidates[:max_candidates]
     errors = []
-    for u in candidates:
-        try:
-            data = http_get_json(u, timeout=timeout, retries=0)
-            return data, u
-        except urllib.error.HTTPError as e:
-            errors.append("%s → HTTP %s" % (u.split('/')[2], e.code))
-            if e.code == 404:
-                break       # 主地址就没有这个文件，镜像也不会凭空有
-        except Exception as e:
-            reason = "读超时" if isinstance(e, TimeoutError) or 'timed out' in str(e).lower() else str(e)
-            errors.append("%s → %s" % (u.split('/')[2], reason))
-    raise RuntimeError("；".join(errors) if errors else "无可用地址")
+    seen = set()
+    for idx, u in enumerate(candidates):
+        attempts = [u]
+        if idx == 0:
+            sep = '&' if '?' in u else '?'
+            attempts.append(u + sep + '_t=%d' % int(time.time()))
+        for au in attempts:
+            if au in seen:
+                continue
+            seen.add(au)
+            try:
+                data = http_get_json(au, timeout=timeout, retries=0)
+                return data, u
+            except urllib.error.HTTPError as e:
+                errors.append("%s → %s" % (_host_of(u), _err_text(e)))
+                if e.code == 404 and idx == 0:
+                    raise RuntimeError("；".join(errors))
+            except Exception as e:
+                errors.append("%s → %s" % (_host_of(u), _err_text(e)))
+    # 去重保序，避免同一域名重复刷屏
+    uniq = []
+    for e in errors:
+        if e not in uniq:
+            uniq.append(e)
+    raise RuntimeError("；".join(uniq) if uniq else "无可用地址")
 
 
 def http_download(url, dest, timeout=120, progress_cb=None):
@@ -4964,6 +5095,59 @@ class PythonAPI(QObject):
     def exportDataPack(self, jsonStr):
         """导出数据包，供发布者覆盖仓库 data/game_data.json。"""
         self._saveToFile(jsonStr, "game_data.json")
+
+    @pyqtSlot()
+    def importDataPack(self):
+        """从本地 game_data.json 导入数据包（网络全挂时的兜底）。
+        走与在线同步完全相同的差异检测 + 用户确认流程，不会直接覆盖本地数据。"""
+        try:
+            filePath, _ = QtWidgets.QFileDialog.getOpenFileName(
+                None, "选择数据包文件", "game_data.json", "JSON文件 (*.json)")
+            if not filePath:
+                return
+            with open(filePath, 'r', encoding='utf-8-sig') as f:
+                pack = json.load(f)
+            if not isinstance(pack, dict):
+                raise ValueError("文件内容不是 JSON 对象")
+            if not isinstance(pack.get('spirits'), list) and not isinstance(pack.get('seasons'), list):
+                raise ValueError("文件里没有 spirits / seasons 字段，可能选错了文件")
+            result = {"status": "ok", "pack": pack,
+                      "source": "file:" + os.path.basename(filePath)}
+        except Exception as e:
+            result = {"status": "error", "message": "读取数据包失败：%s" % e}
+        try:
+            self.sigRunJs.emit("onGameDataFetched(%s)" % json.dumps(result, ensure_ascii=False))
+        except Exception:
+            pass
+
+    @pyqtSlot(str)
+    def testDataPackUrls(self, url):
+        """逐个测试数据包候选地址（主地址 + 镜像），把每条的结果回传前端。
+        用户网络差异很大，让他点一下就知道该把哪条填进「数据包直链」。"""
+        def _run():
+            target = (url or "").strip()
+            results = []
+            try:
+                candidates = ([target] if target else []) + _mirror_urls(target)
+                if not candidates:
+                    results.append({"url": target or "", "ok": False, "ms": 0, "msg": "地址为空"})
+                for u in candidates:
+                    t0 = time.time()
+                    try:
+                        http_get_json(u, timeout=8, retries=0)
+                        results.append({"url": u, "ok": True, "ms": int((time.time() - t0) * 1000),
+                                        "msg": "可用"})
+                    except Exception as e:
+                        results.append({"url": u, "ok": False, "ms": int((time.time() - t0) * 1000),
+                                        "msg": _err_text(e)})
+            except Exception as e:
+                results.append({"url": target, "ok": False, "ms": 0, "msg": str(e)})
+            try:
+                self.sigRunJs.emit("onDataUrlTested(%s)" % json.dumps(
+                    {"status": "ok", "results": results}, ensure_ascii=False))
+            except Exception:
+                pass
+        threading.Thread(target=_run, daemon=True).start()
 
     @pyqtSlot(str)
     def startUpdate(self, manifestJson):
