@@ -3522,6 +3522,9 @@ id="externalLink">🔗 打开查询工具</a>
     function initPythonAPI() {
         new QWebChannel(qt.webChannelTransport, function(channel) {
             pythonAPI = channel.objects.pythonAPI;
+            // 注意：这个回调是异步的，init() 跑完时 pythonAPI 可能还是 null。
+            // 所以数据包同步必须等通道就绪后再触发，否则会被静默跳过。
+            setTimeout(function () { syncGameData(true); }, 600);
             document.getElementById("exportWarehouseBtn")?.addEventListener("click", function() {
                 if(pythonAPI) pythonAPI.exportWarehouse(JSON.stringify({ ballTypes, inventory }));
             });
@@ -4141,6 +4144,7 @@ id="externalLink">🔗 打开查询工具</a>
     // 数据包放在仓库 data/game_data.json，检查软件更新时顺带拉取，避免每个赛季都要重新打包 exe
     // =========================================================================
     const DATA_VERSION_KEY = 'game_data_version';
+    let dataSyncInFlight = false;
 
     function getDataPackUrl() {
         return localStorage.getItem('update_data_url') || DEFAULT_DATA_URL || '';
@@ -4164,17 +4168,24 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     function syncGameData(silent) {
+        if (dataSyncInFlight) return;
         const url = getDataPackUrl();
         const st = document.getElementById('dataSyncStatus');
         if (!url) {
             if (st) st.textContent = '未配置数据包地址';
             return;
         }
+        if (!pythonAPI) {
+            if (st) st.textContent = '正在等待程序就绪…';
+            return;
+        }
         if (st) st.textContent = '正在同步数据…';
-        if (pythonAPI) pythonAPI.syncGameData(url);
+        dataSyncInFlight = true;
+        pythonAPI.syncGameData(url);
     }
 
     function onGameDataFetched(res) {
+        dataSyncInFlight = false;
         const st = document.getElementById('dataSyncStatus');
         if (!res || res.status === 'error') {
             if (st) st.textContent = '数据同步失败：' + (res && res.message ? res.message : '未知错误');
@@ -4383,13 +4394,8 @@ id="externalLink">🔗 打开查询工具</a>
         }
     }
 
-    // 启动后静默同步一次游戏数据（不依赖是否配置了 exe 更新源）
-    function maybeAutoSyncData() {
-        if (!pythonAPI) return;
-        setTimeout(() => syncGameData(true), 2500);
-    }
-
-    function init(){ loadData(); initTabs(); bindActions(); initPythonAPI(); fullRender(); loadUpdateConfig(); loadDataConfig(); bindDataSyncButtons(); maybeAutoCheckUpdate(); maybeAutoSyncData(); }
+    // 启动后静默同步一次游戏数据由 initPythonAPI 的通道就绪回调触发（时序更可靠）
+    function init(){ loadData(); initTabs(); bindActions(); initPythonAPI(); fullRender(); loadUpdateConfig(); loadDataConfig(); bindDataSyncButtons(); maybeAutoCheckUpdate(); }
     init();
 </script>
 </body>
