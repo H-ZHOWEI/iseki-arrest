@@ -18,7 +18,7 @@
 - **周本精灵成长计划**：按 0→5 星（2 / 4 / 8 / 16 / 30，合计 60 材料）计算培养需求，记录已有材料、升星时自动扣除。
 - **咕噜球仓库 & 统计**：记录库存、战斗/购买获得、合成属性球（1:1）；捕捉统计支持「每日需抓轮数」与「统一球数 / 每只所需球数」双向同步。
 - **数据备份灵活**：各模块**独立导入导出** + 一键**全部数据备份** + **快速粘贴导入**（复制 JSON 直接导入，无需存文件）。
-- **软件自动更新**：基于 GitHub Releases，可手动「检查更新」，版本号按**语义化比对**（如 `1.10.0` 不会误判小于 `1.9.0`），发现新版一键更新。
+- **软件自动更新**：基于仓库内 `version.json` 清单（其 `download_url` 指向仓库 `dist/` 下的 exe，模仿「喵想奇记」把 exe 直接提交进仓库的做法），可手动「检查更新」，版本号按**语义化比对**（如 `1.10.0` 不会误判小于 `1.9.0`），发现新版一键更新。
 - **本机存储、数据私有**：所有数据保存在本机（内置网页本地存储），不调用任何外部服务、不上传任何数据（仅可选的更新检查会访问 GitHub）。
 
 ---
@@ -27,12 +27,13 @@
 
 ```
 automation_app.py       主程序（PyQt5 + 内嵌 HTML/JS 单文件应用）
-异色逮捕计划.spec       PyInstaller 打包配置
-package.bat             一键打包脚本（自动探测 Python + 临时移走 PyQt5 自带 VC++ 库避免启动崩溃 + 嵌入程序图标）
+异色逮捕计划.spec       PyInstaller 打包配置（图标 / 单文件 / 体积裁剪规则都在这）
+package.bat             一键打包脚本（自动探测 Python + 临时移走 PyQt5 自带 VC++ 库避免启动崩溃 + 按 spec 打包 + 体积校验）
 application-note.ico    程序图标
+version.json           自动更新清单（version + download_url 指向仓库内 dist/ 下的 exe）
 version.json.example    自动更新配置示例（version.json 模板）
 操作指引.md             使用手册（操作指引）
-dist/异色逮捕计划.exe   已打包好的可执行文件（Windows，通过 GitHub Releases 发布，不在仓库内）
+dist/异色逮捕计划.exe   已打包好的可执行文件（Windows，直接提交进仓库 dist/ 目录，供用户下载与自更新）
 ```
 
 > 本仓库只包含程序源码与文档，**不含任何个人数据**。个人捕捉记录在 exe 本机存储里，请自行通过「全部数据备份」保管、迁移。
@@ -41,7 +42,7 @@ dist/异色逮捕计划.exe   已打包好的可执行文件（Windows，通过 
 
 ## 直接使用
 
-1. 打开 GitHub 仓库的 **Releases**，下载 `异色逮捕计划.exe`，双击运行（免安装）。
+1. 在 GitHub 仓库的 **`dist/` 目录**下载 `异色逮捕计划.exe`，双击运行（免安装）。
 2. 数据保存在本机；换电脑或重装前，请用「设置 → 全部数据备份」导出，到新机器再导入恢复。
 
 ---
@@ -63,8 +64,18 @@ python automation_app.py
 
 1. **自动探测**第一个同时具备 PyQt5 与 PyInstaller 的 Python（本机多 Python 时不会指错环境）。
 2. **临时移走 PyQt5 自带的 VC++ 运行库**（`msvcp140 / vcruntime140` 等），避免与系统运行库冲突导致打出的 exe 一启动就 `0xc0000005` 崩溃；打包结束（无论成败）再还原，不影响你的 Python 环境。
-3. 嵌入程序图标（`--icon application-note.ico`）并把图标打进 exe（`--add-data`），保证下载后图标正确。
-4. 打包，产物在 `dist/异色逮捕计划.exe`。
+3. 按 `异色逮捕计划.spec` 打包：exe 图标、单文件、无控制台，以及**体积裁剪**都在 spec 里。
+4. 打包，产物在 `dist/异色逮捕计划.exe`（约 **83 MB**）。
+
+**关于体积裁剪**：PyQt5 的打包钩子会把整个 Qt5 目录（约 96 MB）都塞进去，不处理的话 exe 会到 107 MB，**超过 GitHub 单文件 100 MB 限制，push 会被拒绝**（`remote: error: File ... exceeds GitHub's file size limit of 100.00 MB`）。spec 里的 `DROP_NAMES / DROP_PREFIXES` 剔除了这些用不到的重型文件：
+
+- `opengl32sw.dll`（软件 OpenGL 回退；WebEngine 在 Windows 上走 ANGLE）
+- `qtwebengine_devtools_resources.pak`（开发者工具资源）
+- 53 个 Chromium 语言包中除 `zh-CN / zh-TW / en-US` 外的全部
+- 整套 `qml/`（QtQuick / Controls / Quick3D，本项目是纯 Widgets + HTML）
+- `Qt5XmlPatterns / Qt5Quick3D* / Qt5Bluetooth / Qt5Sql / Qt5Test` 等未使用的模块
+
+裁剪后 107 MB → **83 MB**，图标、WebEngine 渲染、自动更新均实测正常。若以后新增功能用到被剔除的模块，从 spec 里删掉对应条目即可。
 
 也可以手动打包：
 
@@ -73,20 +84,27 @@ pip install pyinstaller PyQt5 PyQtWebEngine
 pyinstaller 异色逮捕计划.spec --noconfirm
 ```
 
-> 注意：`application-note.ico` 必须与打包脚本同目录，缺失会直接报错退出。
+> 注意：`application-note.ico` 必须与打包脚本同目录，缺失会直接报错退出；打包请始终**按 spec 打包**，不要用 `pyinstaller automation_app.py`，否则会重新生成 spec 把裁剪规则冲掉，exe 又会涨回 107 MB。
 
 ---
 
 ## 发布更新（让软件能自更新）
 
-软件只认 GitHub Releases 里名为 `异色逮捕计划.exe` 的附件：
+更新机制模仿「喵想奇记」：**exe 直接提交进仓库的 `dist/` 目录**，再由仓库根目录的 `version.json` 清单告知软件最新版本与下载地址。默认更新源就是这个 `version.json`（位于 `https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json`）。
 
 1. 改动代码后，把 `automation_app.py` 里的 `APP_VERSION` 改成新版本号（如 `1.3.1`，语义化版本）。
 2. 双击 `package.bat` 重新打包，得到新的 `dist/异色逮捕计划.exe`。
-3. 在仓库 **Releases** 发布新版本（Tag 如 `v1.3.1`），把 `异色逮捕计划.exe` 作为附件上传。
-4. 旧版用户点「检查更新」即可检测到新版本并一键更新。
+3. 把新 exe 放进 **`dist/` 目录**并提交到仓库（`.gitignore` 已为它放行）。
+   > **exe 必须小于 100 MB**，否则 GitHub 会拒绝推送。按 spec 打包出来的约 83 MB，正常没问题；若哪天体积又涨过 100 MB，说明裁剪规则被冲掉了，回看上一节「关于体积裁剪」。
+4. 更新仓库根目录的 **`version.json`**：把 `version` 改成新版本号，`size` 填字节数，并用以下命令重算 `sha256` 后填进去：
+   ```bash
+   certutil -hashfile dist/异色逮捕计划.exe SHA256
+   ```
+5. 提交推送后，旧版用户点「检查更新」即可检测到新版本并一键更新（下载地址指向仓库内 `dist/` 的 exe，带 SHA256 校验）。
 
-`version.json.example` 是自定义更新源（version.json）的模板，默认用 GitHub Releases，一般无需改动。
+> 也可改用 GitHub Releases：在仓库 Releases 上传名为 `异色逮捕计划.exe` 的附件，再把「软件更新」里的更新来源填成 `H-ZHOWEI/iseki-arrest` 即可（两种来源软件都支持）。
+
+`version.json.example` 是 `version.json` 的模板。
 
 ---
 

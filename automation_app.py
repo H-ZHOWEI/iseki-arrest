@@ -58,7 +58,7 @@ import urllib.error
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
 APP_VERSION = "1.3.1"
-DEFAULT_UPDATE_REPO = "H-ZHOWEI/iseki-arrest"  # 默认更新仓库（GitHub Releases）
+DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 
 # ----------------------------- HTML 界面（前端逻辑）--------------------------------
 HTML_CONTENT = r"""<!DOCTYPE html>
@@ -1024,19 +1024,19 @@ id="externalLink">🔗 打开查询工具</a>
             <div class="card-header"><h2>🔄 软件更新</h2></div>
             <div class="settings-grid">
                 <div style="grid-column: 1 / -1;">
-                    <label>GitHub 仓库（owner/repo，推荐）</label>
+                    <label>GitHub 仓库（owner/repo，走 Releases 时填写）</label>
                     <input type="text" id="updateGithubRepo" class="search-box" style="width:100%;" placeholder="H-ZHOWEI/iseki-arrest">
                 </div>
                 <div style="grid-column: 1 / -1;">
-                    <label>自定义 manifest 直链（可选，留空则用上面的 GitHub）</label>
-                    <input type="text" id="updateManifestUrl" class="search-box" style="width:100%;" placeholder="https://example.com/version.json">
+                    <label>更新清单直链（version.json，默认已填仓库内清单，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）</label>
+                    <input type="text" id="updateManifestUrl" class="search-box" style="width:100%;" placeholder="https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json">
                 </div>
             </div>
             <div style="display:flex; gap:8px; margin-top:10px; align-items:center; flex-wrap:wrap;">
                 <button id="checkUpdateBtn" class="primary small">检查更新</button>
                 <span id="updateStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
             </div>
-            <div class="badge" style="margin-top:8px;">💡 在 GitHub 仓库的 <b>Releases</b> 中发布新版（上传名为「异色逮捕计划.exe」的附件），软件会自动读取最新 Release 的版本号与下载链接。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
+            <div class="badge" style="margin-top:8px;">💡 默认通过仓库根目录的 <b>version.json</b> 清单检查更新，其 <b>download_url</b> 指向仓库内 <b>dist/异色逮捕计划.exe</b>（与「喵想奇记」一致：把 exe 直接提交进仓库）。发布新版时，先把新 exe 放进 <b>dist/</b> 并提交，再更新 <b>version.json</b> 的 version 与 sha256 即可；也可改用 Releases（在仓库 Releases 上传同名 exe 附件）。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
         </div>
 
         <!-- 成长计划设置 -->
@@ -4102,8 +4102,12 @@ id="externalLink">🔗 打开查询工具</a>
         const url = localStorage.getItem('update_manifest_url') || '';
         const repoInp = document.getElementById('updateGithubRepo');
         const urlInp = document.getElementById('updateManifestUrl');
-        if (repoInp) repoInp.value = repo || DEFAULT_UPDATE_REPO;
-        if (urlInp) urlInp.value = url;
+        // DEFAULT_UPDATE_REPO 可能是 owner/repo（走 Releases）或 version.json 直链（仓库内 exe）；
+        // 按形态填入对应输入框，用户已保存的配置优先。
+        const def = DEFAULT_UPDATE_REPO || '';
+        const defIsUrl = /^https?:\/\//i.test(def);
+        if (repoInp) repoInp.value = repo || (defIsUrl ? '' : def);
+        if (urlInp) urlInp.value = url || (defIsUrl ? def : '');
         const lbl = document.getElementById('currentVersionLabel');
         if (lbl) lbl.textContent = APP_VERSION;
     }
@@ -4267,7 +4271,9 @@ def sha256_of_file(path):
 def fetch_github_release(repo):
     """从 GitHub Releases 获取最新版本的下载信息。
     repo 形如 'owner/repo' 或完整 releases/latest API 地址。
-    返回 {'version': '1.3.1', 'download_url': '...', 'notes': '...'} 或 None。"""
+    返回 {'version': '1.3.1', 'download_url': '...', 'notes': '...'} 或 None。
+    （注：本软件默认改用仓库根目录 version.json 清单，其 download_url 指向仓库内
+    dist/异色逮捕计划.exe —— 模仿「喵想奇记」把 exe 直接提交进仓库的做法。）"""
     if repo.startswith('http'):
         api_url = repo
     else:
