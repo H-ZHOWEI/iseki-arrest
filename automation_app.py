@@ -53,11 +53,12 @@ import base64
 import hashlib
 import threading
 import subprocess
+import time
 import urllib.request
 import urllib.error
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 
@@ -1040,16 +1041,21 @@ id="externalLink">🔗 打开查询工具</a>
 
             <div style="border-top:1px dashed #cfe0bf; margin-top:14px; padding-top:12px;">
                 <label style="font-weight:600;">📦 游戏数据（预设精灵库 / 赛季）</label>
+                <div style="margin-top:8px;">
+                    <label>数据包直链（留空用默认；国内网络拉不动时可换成镜像，如 cdn.jsdelivr.net/gh/H-ZHOWEI/iseki-arrest@main/data/game_data.json）</label>
+                    <input type="text" id="updateDataUrl" class="search-box" style="width:100%;" placeholder="https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json">
+                </div>
                 <div style="display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap;">
-                    <button id="syncDataBtn" class="small">同步数据</button>
+                    <button id="syncDataBtn" class="small">检查数据更新</button>
                     <button id="exportDataPackBtn" class="small">导出数据包（发布用）</button>
                     <span id="dataSyncStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
                 </div>
                 <div class="badge" style="margin-top:8px;">
                     💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
-                    点「检查更新」时会<b>顺带自动同步一次</b>数据；也可单独点「同步数据」。<br>
-                    合并规则：<b>只增不删</b>——新增本地没有的赛季/精灵；已存在的精灵<b>仅当你没手动改过</b>时才更新属性，你改过的精灵和自己新增的条目不会被覆盖；赛季起止日期以数据包为准（你给赛季加的分类与备注会保留）。<br>
-                    发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会自动同步。
+                    点「检查更新」时<b>先查软件版本，再查赛季 / 精灵是否有新增</b>；也可单独点「检查数据更新」。<br>
+                    主地址（GitHub raw）读超时会<b>自动换 jsDelivr / gitmirror 镜像</b>重试，仍失败可点按钮再试一次。<br>
+                    发现新增时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只增不删、只填空不覆盖</b>——只新增本地没有的赛季/精灵，本地已有条目（包括你改过的属性和自己加的内容）一律不覆盖、不删除。<br>
+                    发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新增提示。
                 </div>
             </div>
             <div class="badge" style="margin-top:8px;">💡 默认通过仓库根目录的 <b>version.json</b> 清单检查更新，其 <b>download_url</b> 指向仓库内 <b>dist/异色逮捕计划.exe</b>（与「喵想奇记」一致：把 exe 直接提交进仓库）。发布新版时，先把新 exe 放进 <b>dist/</b> 并提交，再更新 <b>version.json</b> 的 version 与 sha256 即可；也可改用 Releases（在仓库 Releases 上传同名 exe 附件）。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
@@ -3523,8 +3529,8 @@ id="externalLink">🔗 打开查询工具</a>
         new QWebChannel(qt.webChannelTransport, function(channel) {
             pythonAPI = channel.objects.pythonAPI;
             // 注意：这个回调是异步的，init() 跑完时 pythonAPI 可能还是 null。
-            // 所以数据包同步必须等通道就绪后再触发，否则会被静默跳过。
-            setTimeout(function () { syncGameData(true); }, 600);
+            // 数据包检测统一由 maybeAutoCheckUpdate() 在通道就绪后触发（先查版本，再查新增数据），
+            // 这里不再单独发起，避免一次启动重复请求两次数据包。
             document.getElementById("exportWarehouseBtn")?.addEventListener("click", function() {
                 if(pythonAPI) pythonAPI.exportWarehouse(JSON.stringify({ ballTypes, inventory }));
             });
@@ -4142,9 +4148,14 @@ id="externalLink">🔗 打开查询工具</a>
     // =========================================================================
     // 游戏数据同步（预设精灵库 + 赛季）
     // 数据包放在仓库 data/game_data.json，检查软件更新时顺带拉取，避免每个赛季都要重新打包 exe
+    // 流程：拉取 → 差异检测（只读） → 有新增才弹窗询问 → 用户同意后只增不删地合入本地
     // =========================================================================
     const DATA_VERSION_KEY = 'game_data_version';
     let dataSyncInFlight = false;
+    let pendingDataPack = null;      // 已拉取、等待用户确认的数据包
+    let skippedDataVersion = '';     // 本次运行中用户选择「以后再说」的数据版本（不写入本地，重启会再提示）
+    let dataCheckedThisRound = false; // 本轮「检查更新」是否已检查过数据
+    let pendingDataCheckSilent = true;
 
     function getDataPackUrl() {
         return localStorage.getItem('update_data_url') || DEFAULT_DATA_URL || '';
@@ -4158,17 +4169,33 @@ id="externalLink">🔗 打开查询工具</a>
         }
         const urlEl = document.getElementById('dataPackUrlLabel');
         if (urlEl) urlEl.textContent = getDataPackUrl() || '未配置';
+        const inp = document.getElementById('updateDataUrl');
+        if (inp && document.activeElement !== inp) inp.value = localStorage.getItem('update_data_url') || '';
+    }
+
+    // 把界面上填的数据包直链存起来（留空则回落到默认地址）
+    function saveDataPackUrl() {
+        const inp = document.getElementById('updateDataUrl');
+        if (!inp) return;
+        const v = (inp.value || '').trim();
+        if (v) localStorage.setItem('update_data_url', v);
+        else localStorage.removeItem('update_data_url');
     }
 
     function bindDataSyncButtons() {
         const sb = document.getElementById('syncDataBtn');
-        if (sb) sb.onclick = function () { syncGameData(false); };
+        if (sb) sb.onclick = function () { checkGameDataUpdates(false); };
         const eb = document.getElementById('exportDataPackBtn');
         if (eb) eb.onclick = function () { exportDataPack(); };
+        const du = document.getElementById('updateDataUrl');
+        if (du) du.addEventListener('change', function () { saveDataPackUrl(); loadDataConfig(); });
+        if (du) du.addEventListener('blur', function () { saveDataPackUrl(); loadDataConfig(); });
     }
 
-    function syncGameData(silent) {
+    // 检查数据包是否有新增赛季 / 精灵（只拉取，不改动任何本地数据）
+    function checkGameDataUpdates(silent) {
         if (dataSyncInFlight) return;
+        saveDataPackUrl();
         const url = getDataPackUrl();
         const st = document.getElementById('dataSyncStatus');
         if (!url) {
@@ -4179,43 +4206,178 @@ id="externalLink">🔗 打开查询工具</a>
             if (st) st.textContent = '正在等待程序就绪…';
             return;
         }
-        if (st) st.textContent = '正在同步数据…';
+        if (st) st.textContent = '正在检查数据更新…（网络慢时会自动换镜像）';
         dataSyncInFlight = true;
         pythonAPI.syncGameData(url);
+    }
+
+    // 兼容旧按钮/旧调用
+    function syncGameData(silent) { checkGameDataUpdates(!!silent); }
+
+    // 差异检测：纯只读，判断远端数据包里有哪些本地还没有的赛季 / 精灵
+    function diffGameData(pack) {
+        const knownSeasons = {};
+        const knownSpirits = {};
+        seasons.forEach(s => { if (s && s.name) knownSeasons[String(s.name).trim()] = true; });
+        presetSpirits.forEach(p => { if (p && p.name) knownSpirits[String(p.name).trim()] = true; });
+
+        const res = { seasons: [], spirits: [] };
+        (pack.seasons || []).forEach(rs => {
+            const name = String((rs && rs.name) || '').trim();
+            if (!name || knownSeasons[name]) return;
+            knownSeasons[name] = true;      // 远端包内同名只算一次
+            res.seasons.push({
+                name: name,
+                startDate: rs.startDate || '',
+                endDate: rs.endDate || '',
+                order: rs.order
+            });
+        });
+        (pack.spirits || []).forEach(rp => {
+            const name = String((rp && rp.name) || '').trim();
+            if (!name || knownSpirits[name]) return;
+            knownSpirits[name] = true;
+            res.spirits.push({
+                name: name,
+                season: rp.season ? String(rp.season).trim() : '',
+                type: rp.type || 'normal'
+            });
+        });
+        return res;
     }
 
     function onGameDataFetched(res) {
         dataSyncInFlight = false;
         const st = document.getElementById('dataSyncStatus');
         if (!res || res.status === 'error') {
-            if (st) st.textContent = '数据同步失败：' + (res && res.message ? res.message : '未知错误');
+            let msg = (res && res.message) ? res.message : '未知错误';
+            if (msg.indexOf('数据同步失败') !== 0) msg = '数据同步失败：' + msg;
+            if (st) st.textContent = msg + '（可点「检查数据更新」重试）';
             return;
         }
         const pack = res.pack || {};
         const remoteVer = String(pack.data_version || '');
         const localVer = localStorage.getItem(DATA_VERSION_KEY) || '';
-        if (remoteVer && remoteVer === localVer) {
-            if (st) st.textContent = '数据已是最新';
+        const verShow = remoteVer ? String(remoteVer).replace('T', ' ').slice(0, 10) : '';
+        const viaMirror = !!res.source && res.source !== getDataPackUrl();
+
+        if (remoteVer && remoteVer === skippedDataVersion) {
+            if (st) st.textContent = '已跳过本次数据更新（下次启动会再提示）';
             return;
         }
+
+        const diff = diffGameData(pack);
+        const totalNew = diff.seasons.length + diff.spirits.length;
+        if (!totalNew) {
+            if (remoteVer) localStorage.setItem(DATA_VERSION_KEY, remoteVer);
+            loadDataConfig();
+            if (st) {
+                st.textContent = ((remoteVer && remoteVer !== localVer)
+                    ? '数据已是最新（无新增赛季 / 精灵）' : '数据已是最新')
+                    + (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : '');
+            }
+            return;
+        }
+
+        // 有新增：只记录待确认，暂不写入本地
+        pendingDataPack = pack;
+        if (st) {
+            st.textContent = '发现新增 ' + diff.spirits.length + ' 个精灵、' + diff.seasons.length
+                + ' 个赛季，等待你确认…'
+                + (viaMirror ? '（经镜像获取）' : '');
+        }
+        showDataSyncDialog(diff, verShow);
+    }
+
+    function showDataSyncDialog(diff, verShow) {
+        closeDataSyncDialog();
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'dataSyncModal';
+
+        function chip(text, note) {
+            return '<span style="display:inline-block; background:#f1f6ea; border:1px solid #d9e6c9;'
+                + ' border-radius:12px; padding:4px 9px; margin:3px 4px 3px 0; font-size:0.74rem;'
+                + ' color:#2f4a24;">' + escapeHtml(text)
+                + (note ? '<em style="display:block; font-style:normal; color:#7d9870; font-size:0.66rem;">'
+                    + escapeHtml(note) + '</em>' : '')
+                + '</span>';
+        }
+
+        const seasonHtml = diff.seasons.length
+            ? '<div style="margin-top:10px;">'
+              + '<div style="font-size:0.78rem; color:#2b6e2f; font-weight:600; margin-bottom:4px;">新增赛季 '
+              + diff.seasons.length + ' 个</div>'
+              + diff.seasons.map(s => chip(s.name,
+                    (s.startDate || s.endDate) ? ((s.startDate || '?') + ' ~ ' + (s.endDate || '?')) : '')).join('')
+              + '</div>'
+            : '';
+        const spiritHtml = diff.spirits.length
+            ? '<div style="margin-top:10px;">'
+              + '<div style="font-size:0.78rem; color:#2b6e2f; font-weight:600; margin-bottom:4px;">新增异色精灵 '
+              + diff.spirits.length + ' 个</div>'
+              + diff.spirits.map(p => chip(p.name, p.season || '')).join('')
+              + '</div>'
+            : '';
+
+        modal.innerHTML = '<div class="modal-content" style="max-width:480px;">'
+            + '<h3 style="margin-top:0;">发现新的游戏数据</h3>'
+            + '<p style="font-size:0.76rem; color:#5a7a4a; line-height:1.5;">'
+            + (verShow ? '数据版本：' + escapeHtml(verShow) + '<br>' : '')
+            + '只会把下面这些<b>新增</b>内容加到你的本地数据，'
+            + '你已有的赛季、精灵和抓取记录<b>不会被覆盖或删除</b>。</p>'
+            + '<div style="max-height:250px; overflow:auto; background:#f6faef; border:1px solid #e6efda; border-radius:14px; padding:8px 10px;">'
+            + seasonHtml + spiritHtml + '</div>'
+            + '<div style="display:flex; gap:8px; margin-top:14px;">'
+            + '<button id="applyDataBtn" class="primary">更新到本地</button>'
+            + '<button id="skipDataBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
+            + ' color:#2b6e2f; border-radius:14px; padding:8px 16px; cursor:pointer; font-weight:600;">以后再说</button>'
+            + '</div></div>';
+        document.body.appendChild(modal);
+
+        modal.querySelector('#applyDataBtn').onclick = function () { applyGameData(); };
+        modal.querySelector('#skipDataBtn').onclick = function () {
+            const remoteVer = pendingDataPack ? String(pendingDataPack.data_version || '') : '';
+            skippedDataVersion = remoteVer;
+            pendingDataPack = null;
+            closeDataSyncDialog();
+            const st = document.getElementById('dataSyncStatus');
+            if (st) st.textContent = '已跳过本次数据更新（下次启动会再提示）';
+        };
+    }
+
+    function closeDataSyncDialog() {
+        const old = document.getElementById('dataSyncModal');
+        if (old) old.remove();
+    }
+
+    // 用户确认后才真正写入本地
+    function applyGameData() {
+        if (!pendingDataPack) { closeDataSyncDialog(); return; }
+        const pack = pendingDataPack;
+        const remoteVer = String(pack.data_version || '');
         const added = mergeGameData(pack);
         if (remoteVer) localStorage.setItem(DATA_VERSION_KEY, remoteVer);
+        pendingDataPack = null;
         persistAll();
         refreshIdSequences();
         populateSeasonDropdown();
         fullRender();
         loadDataConfig();
-        const verShow = remoteVer ? String(remoteVer).replace('T', ' ').slice(0, 10) : '';
-        const msg = '数据已同步：新增 ' + added.spirits + ' 个精灵、' + added.seasons + ' 个赛季'
-            + (verShow ? '（数据版本 ' + verShow + '）' : '');
-        if (st) st.textContent = msg;
+        closeDataSyncDialog();
+        const st = document.getElementById('dataSyncStatus');
+        if (st) {
+            st.textContent = '已更新：新增 ' + added.spirits + ' 个精灵、' + added.seasons
+                + ' 个赛季' + (added.filled ? '，补齐 ' + added.filled + ' 项空缺' : '')
+                + '（原有数据已保留）';
+        }
     }
 
-    // 合并规则：只增不删
-    // - 赛季：按名称匹配，缺失则新增；已存在则更新 order/起止日期，保留本地 categories/categoryNotes
-    // - 精灵：按名称匹配，缺失则新增；已存在仅当本地从未手动编辑（updatedAt 为空或纪元时间）才更新属性
+    // 合并规则：只增不删、只填空不覆盖
+    // - 赛季：本地没有 → 新增；已存在 → 仅在本地字段为空时补齐，绝不覆盖用户改过的值
+    // - 精灵：本地没有 → 新增；已存在 → 仅在本地字段为空时补齐（如 attrs 为空）
     function mergeGameData(pack) {
-        const added = { spirits: 0, seasons: 0 };
+        const added = { spirits: 0, seasons: 0, filled: 0 };
         const seasonByName = {};
         seasons.forEach(s => { if (s && s.name) seasonByName[String(s.name).trim()] = s; });
 
@@ -4224,10 +4386,14 @@ id="externalLink">🔗 打开查询工具</a>
             if (!name) return;
             const exist = seasonByName[name];
             if (exist) {
-                if (rs.order !== undefined && rs.order !== null && rs.order !== '') exist.order = rs.order;
-                if (rs.startDate) exist.startDate = rs.startDate;
-                if (rs.endDate) exist.endDate = rs.endDate;
-                if (!exist.categories) exist.categories = [];
+                const orderEmpty = (exist.order === undefined || exist.order === null
+                                    || exist.order === '' || exist.order === 0);
+                if (orderEmpty && rs.order !== undefined && rs.order !== null && rs.order !== '') {
+                    exist.order = rs.order; added.filled++;
+                }
+                if (!exist.startDate && rs.startDate) { exist.startDate = rs.startDate; added.filled++; }
+                if (!exist.endDate && rs.endDate) { exist.endDate = rs.endDate; added.filled++; }
+                if (!Array.isArray(exist.categories)) exist.categories = [];
                 if (!exist.categoryNotes) exist.categoryNotes = {};
             } else {
                 const ns = {
@@ -4252,13 +4418,13 @@ id="externalLink">🔗 打开查询工具</a>
             const seasonId = (sName && seasonByName[sName]) ? seasonByName[sName].id : null;
             const exist = presetByName[name];
             if (exist) {
-                const t = exist.updatedAt ? new Date(exist.updatedAt).getTime() : 0;
-                const neverEdited = (!t || t === 0);
-                if (neverEdited) {
-                    if (Array.isArray(rp.attrs) && rp.attrs.length) exist.attrs = rp.attrs.slice();
-                    if (rp.type) exist.type = rp.type;
-                    if (seasonId !== null) exist.defaultSeasonId = seasonId;
+                if ((!Array.isArray(exist.attrs) || !exist.attrs.length)
+                    && Array.isArray(rp.attrs) && rp.attrs.length) {
+                    exist.attrs = rp.attrs.slice(); added.filled++;
                 }
+                if (!exist.type && rp.type) { exist.type = rp.type; added.filled++; }
+                const sidEmpty = (exist.defaultSeasonId === null || exist.defaultSeasonId === undefined);
+                if (sidEmpty && seasonId !== null) { exist.defaultSeasonId = seasonId; added.filled++; }
             } else {
                 const np = {
                     id: nextPresetId++, name: name,
@@ -4313,28 +4479,39 @@ id="externalLink">🔗 打开查询工具</a>
         const repo = (document.getElementById('updateGithubRepo') || {}).value || '';
         const url = (document.getElementById('updateManifestUrl') || {}).value || '';
         saveUpdateConfig();
-        // 数据包（预设精灵库 / 赛季）与 exe 版本是两条独立通道：
-        // 素材数据更新不必重新打包 exe，所以每次检查更新都顺带同步一次
-        syncGameData(!!silent);
+        // 顺序：先检测软件版本，版本检查结束后再检测赛季 / 精灵是否有新增（见 afterVersionCheck）
+        pendingDataCheckSilent = !!silent;
+        dataCheckedThisRound = false;
         const status = document.getElementById('updateStatus');
         if (!repo && !url) {
-            if (status) status.textContent = '请先填写 GitHub 仓库 或 更新地址';
+            if (status) status.textContent = '未填写更新地址，仅检查游戏数据…';
             if (!silent) alert('请先在「软件更新」填写 GitHub 仓库（格式 owner/repo）');
+            afterVersionCheck();
             return;
         }
-        if (status) status.textContent = '正在检查更新…';
+        if (status) status.textContent = '正在检查版本…';
         const source = repo.trim() || url.trim();
         if (pythonAPI) pythonAPI.checkUpdate(source);
+        else afterVersionCheck();
+    }
+
+    // 版本检查结束（无论有没有新版本）→ 再检查数据包新增
+    function afterVersionCheck() {
+        if (dataCheckedThisRound) return;
+        dataCheckedThisRound = true;
+        checkGameDataUpdates(pendingDataCheckSilent);
     }
 
     function onUpdateChecked(result) {
         const status = document.getElementById('updateStatus');
         if (!result || result.status === 'noupdate') {
             if (status) status.textContent = '已是最新版本（' + (result ? (result.current || APP_VERSION) : APP_VERSION) + '）';
+            afterVersionCheck();
             return;
         }
         if (result.status === 'error') {
             if (status) status.textContent = '检查失败：' + result.message;
+            afterVersionCheck();
             return;
         }
         if (result.status === 'update') {
@@ -4369,7 +4546,7 @@ id="externalLink">🔗 打开查询工具</a>
             if (pythonAPI) pythonAPI.startUpdate(JSON.stringify(lastUpdateManifest));
         };
         const later = modal.querySelector('#laterUpdateBtn');
-        if (later) later.onclick = () => modal.remove();
+        if (later) later.onclick = () => { modal.remove(); afterVersionCheck(); };
     }
 
     function onUpdateProgress(pct) {
@@ -4388,9 +4565,13 @@ id="externalLink">🔗 打开查询工具</a>
     function maybeAutoCheckUpdate() {
         const repo = localStorage.getItem('update_github_repo') || '';
         const url = localStorage.getItem('update_manifest_url') || '';
-        if ((repo || url) && pythonAPI) {
-            // 启动后静默检查一次
+        if (!pythonAPI) return;
+        if (repo || url) {
+            // 启动后静默检查一次（内部先查版本，再查赛季 / 精灵新增）
             setTimeout(() => doCheckUpdate(true), 1500);
+        } else if (getDataPackUrl()) {
+            // 没配版本地址也要检查数据包，否则新赛季永远同步不到
+            setTimeout(() => checkGameDataUpdates(true), 1500);
         }
     }
 
@@ -4429,11 +4610,61 @@ def compare_versions(a, b):
     return (pa > pb) - (pa < pb)
 
 
-def http_get_json(url, timeout=15):
-    req = urllib.request.Request(url, headers={'User-Agent': 'IsekiArrest-Updater'})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = resp.read().decode('utf-8')
-    return json.loads(data)
+def _mirror_urls(url):
+    """给 GitHub raw 直链生成备用镜像候选（国内 raw 常被卡到读超时）。
+    顺序即尝试顺序：jsDelivr CDN → gitmirror 代理。非 raw 链接返回空列表。"""
+    m = re.match(r'https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)', url or '')
+    if not m:
+        return []
+    owner, repo, branch, path = m.groups()
+    return [
+        "https://cdn.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path),
+        "https://raw.gitmirror.com/%s/%s/%s/%s" % (owner, repo, branch, path),
+    ]
+
+
+def http_get_json(url, timeout=15, retries=0, backoff=1.5):
+    """拉取 JSON。retries 为额外重试次数（网络抖动/读超时时有用）。
+    4xx 不重试——文件不存在或没权限，重试只会白等。"""
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'IsekiArrest-Updater',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read().decode('utf-8')
+            return json.loads(data)
+        except urllib.error.HTTPError as e:
+            last = e
+            if 400 <= e.code < 500:
+                raise
+        except Exception as e:
+            last = e
+        if attempt < retries:
+            time.sleep(backoff * (attempt + 1))
+    raise last
+
+
+def http_get_json_multi(url, timeout=15):
+    """依次尝试主地址与备用镜像，返回 (json, 实际使用的地址)。
+    每个地址只尝试一次，避免用户等太久；主地址失败会立刻换镜像。"""
+    candidates = [url] + _mirror_urls(url)
+    errors = []
+    for u in candidates:
+        try:
+            data = http_get_json(u, timeout=timeout, retries=0)
+            return data, u
+        except urllib.error.HTTPError as e:
+            errors.append("%s → HTTP %s" % (u.split('/')[2], e.code))
+            if e.code == 404:
+                break       # 主地址就没有这个文件，镜像也不会凭空有
+        except Exception as e:
+            reason = "读超时" if isinstance(e, TimeoutError) or 'timed out' in str(e).lower() else str(e)
+            errors.append("%s → %s" % (u.split('/')[2], reason))
+    raise RuntimeError("；".join(errors) if errors else "无可用地址")
 
 
 def http_download(url, dest, timeout=120, progress_cb=None):
@@ -4672,7 +4903,7 @@ class PythonAPI(QObject):
                                 "manifest_url": "github:" + source,
                             }
                 else:
-                    manifest = http_get_json(source, timeout=15)
+                    manifest, used_manifest = http_get_json_multi(source, timeout=12)
                     latest = str(manifest.get("version", ""))
                     cmp = compare_versions(latest, APP_VERSION)
                     if cmp <= 0:
@@ -4686,7 +4917,7 @@ class PythonAPI(QObject):
                             "download_url": manifest.get("download_url", ""),
                             "mandatory": bool(manifest.get("mandatory", False)),
                             "sha256": manifest.get("sha256", ""),
-                            "manifest_url": source,
+                            "manifest_url": used_manifest,
                         }
             except urllib.error.HTTPError as e:
                 result = {"status": "error", "message": "HTTP 错误 %s：%s" % (e.code, e.reason)}
@@ -4700,17 +4931,18 @@ class PythonAPI(QObject):
 
     @pyqtSlot(str)
     def syncGameData(self, url):
-        """拉取游戏数据包（预设精灵库 + 赛季）并回传给前端合并（后台线程）。
-        数据包更新不需要重新打包 exe，用户点「检查更新」即可顺带拿到新赛季数据。"""
+        """拉取游戏数据包（预设精灵库 + 赛季）并回传给前端做差异检测。
+        数据包更新不需要重新打包 exe，用户点「检查更新」即可拿到新赛季数据。
+        主地址（GitHub raw）读超时时自动换 jsDelivr / gitmirror 镜像，避免国内网络下整条同步失败。"""
         def _run():
             try:
                 target = (url or "").strip()
                 if not target:
                     raise ValueError("未配置数据包地址")
-                pack = http_get_json(target, timeout=20)
+                pack, used = http_get_json_multi(target, timeout=15)
                 if not isinstance(pack, dict):
                     raise ValueError("数据包格式错误（应为 JSON 对象）")
-                result = {"status": "ok", "pack": pack}
+                result = {"status": "ok", "pack": pack, "source": used}
             except urllib.error.HTTPError as e:
                 if e.code == 404:
                     result = {"status": "error",
@@ -4718,7 +4950,10 @@ class PythonAPI(QObject):
                 else:
                     result = {"status": "error", "message": "HTTP 错误 %s：%s" % (e.code, e.reason)}
             except Exception as e:
-                result = {"status": "error", "message": "数据同步失败：%s" % e}
+                msg = str(e)
+                if 'timed out' in msg.lower() or '读超时' in msg:
+                    msg = "网络读取超时（已尝试镜像地址）：%s" % msg
+                result = {"status": "error", "message": "数据同步失败：%s" % msg}
             try:
                 self.sigRunJs.emit("onGameDataFetched(%s)" % json.dumps(result, ensure_ascii=False))
             except Exception:
