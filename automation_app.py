@@ -57,8 +57,9 @@ import urllib.request
 import urllib.error
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
+DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 
 # ----------------------------- HTML 界面（前端逻辑）--------------------------------
 HTML_CONTENT = r"""<!DOCTYPE html>
@@ -1036,6 +1037,21 @@ id="externalLink">🔗 打开查询工具</a>
                 <button id="checkUpdateBtn" class="primary small">检查更新</button>
                 <span id="updateStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
             </div>
+
+            <div style="border-top:1px dashed #cfe0bf; margin-top:14px; padding-top:12px;">
+                <label style="font-weight:600;">📦 游戏数据（预设精灵库 / 赛季）</label>
+                <div style="display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+                    <button id="syncDataBtn" class="small">同步数据</button>
+                    <button id="exportDataPackBtn" class="small">导出数据包（发布用）</button>
+                    <span id="dataSyncStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
+                </div>
+                <div class="badge" style="margin-top:8px;">
+                    💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
+                    点「检查更新」时会<b>顺带自动同步一次</b>数据；也可单独点「同步数据」。<br>
+                    合并规则：<b>只增不删</b>——新增本地没有的赛季/精灵；已存在的精灵<b>仅当你没手动改过</b>时才更新属性，你改过的精灵和自己新增的条目不会被覆盖；赛季起止日期以数据包为准（你给赛季加的分类与备注会保留）。<br>
+                    发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会自动同步。
+                </div>
+            </div>
             <div class="badge" style="margin-top:8px;">💡 默认通过仓库根目录的 <b>version.json</b> 清单检查更新，其 <b>download_url</b> 指向仓库内 <b>dist/异色逮捕计划.exe</b>（与「喵想奇记」一致：把 exe 直接提交进仓库）。发布新版时，先把新 exe 放进 <b>dist/</b> 并提交，再更新 <b>version.json</b> 的 version 与 sha256 即可；也可改用 Releases（在仓库 Releases 上传同名 exe 附件）。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
         </div>
 
@@ -1118,6 +1134,7 @@ id="externalLink">🔗 打开查询工具</a>
     let pythonAPI = null;
     const APP_VERSION = "__APP_VERSION__";
     const DEFAULT_UPDATE_REPO = "__DEFAULT_REPO__";
+    const DEFAULT_DATA_URL = "__DATA_URL__";   // 游戏数据包（预设精灵库 + 赛季）
 
     // ---------- 数据结构 ----------
     let ballTypes = []; let inventory = {}; let presetSpirits = []; let spirits = []; let capturedSpirits = [];
@@ -4119,10 +4136,175 @@ id="externalLink">🔗 打开查询工具</a>
         localStorage.setItem('update_manifest_url', url);
     }
 
+    // =========================================================================
+    // 游戏数据同步（预设精灵库 + 赛季）
+    // 数据包放在仓库 data/game_data.json，检查软件更新时顺带拉取，避免每个赛季都要重新打包 exe
+    // =========================================================================
+    const DATA_VERSION_KEY = 'game_data_version';
+
+    function getDataPackUrl() {
+        return localStorage.getItem('update_data_url') || DEFAULT_DATA_URL || '';
+    }
+
+    function loadDataConfig() {
+        const verEl = document.getElementById('dataVersionLabel');
+        if (verEl) {
+            const v = localStorage.getItem(DATA_VERSION_KEY) || '';
+            verEl.textContent = v ? String(v).replace('T', ' ').slice(0, 19) : '未同步';
+        }
+        const urlEl = document.getElementById('dataPackUrlLabel');
+        if (urlEl) urlEl.textContent = getDataPackUrl() || '未配置';
+    }
+
+    function bindDataSyncButtons() {
+        const sb = document.getElementById('syncDataBtn');
+        if (sb) sb.onclick = function () { syncGameData(false); };
+        const eb = document.getElementById('exportDataPackBtn');
+        if (eb) eb.onclick = function () { exportDataPack(); };
+    }
+
+    function syncGameData(silent) {
+        const url = getDataPackUrl();
+        const st = document.getElementById('dataSyncStatus');
+        if (!url) {
+            if (st) st.textContent = '未配置数据包地址';
+            return;
+        }
+        if (st) st.textContent = '正在同步数据…';
+        if (pythonAPI) pythonAPI.syncGameData(url);
+    }
+
+    function onGameDataFetched(res) {
+        const st = document.getElementById('dataSyncStatus');
+        if (!res || res.status === 'error') {
+            if (st) st.textContent = '数据同步失败：' + (res && res.message ? res.message : '未知错误');
+            return;
+        }
+        const pack = res.pack || {};
+        const remoteVer = String(pack.data_version || '');
+        const localVer = localStorage.getItem(DATA_VERSION_KEY) || '';
+        if (remoteVer && remoteVer === localVer) {
+            if (st) st.textContent = '数据已是最新';
+            return;
+        }
+        const added = mergeGameData(pack);
+        if (remoteVer) localStorage.setItem(DATA_VERSION_KEY, remoteVer);
+        persistAll();
+        refreshIdSequences();
+        populateSeasonDropdown();
+        fullRender();
+        loadDataConfig();
+        const verShow = remoteVer ? String(remoteVer).replace('T', ' ').slice(0, 10) : '';
+        const msg = '数据已同步：新增 ' + added.spirits + ' 个精灵、' + added.seasons + ' 个赛季'
+            + (verShow ? '（数据版本 ' + verShow + '）' : '');
+        if (st) st.textContent = msg;
+    }
+
+    // 合并规则：只增不删
+    // - 赛季：按名称匹配，缺失则新增；已存在则更新 order/起止日期，保留本地 categories/categoryNotes
+    // - 精灵：按名称匹配，缺失则新增；已存在仅当本地从未手动编辑（updatedAt 为空或纪元时间）才更新属性
+    function mergeGameData(pack) {
+        const added = { spirits: 0, seasons: 0 };
+        const seasonByName = {};
+        seasons.forEach(s => { if (s && s.name) seasonByName[String(s.name).trim()] = s; });
+
+        (pack.seasons || []).forEach(rs => {
+            const name = String((rs && rs.name) || '').trim();
+            if (!name) return;
+            const exist = seasonByName[name];
+            if (exist) {
+                if (rs.order !== undefined && rs.order !== null && rs.order !== '') exist.order = rs.order;
+                if (rs.startDate) exist.startDate = rs.startDate;
+                if (rs.endDate) exist.endDate = rs.endDate;
+                if (!exist.categories) exist.categories = [];
+                if (!exist.categoryNotes) exist.categoryNotes = {};
+            } else {
+                const ns = {
+                    id: nextSeasonId++, name: name,
+                    order: (rs.order === undefined || rs.order === null) ? 0 : rs.order,
+                    startDate: rs.startDate || '', endDate: rs.endDate || '',
+                    categories: [], categoryNotes: {}
+                };
+                seasons.push(ns);
+                seasonByName[name] = ns;
+                added.seasons++;
+            }
+        });
+
+        const presetByName = {};
+        presetSpirits.forEach(p => { if (p && p.name) presetByName[String(p.name).trim()] = p; });
+
+        (pack.spirits || []).forEach(rp => {
+            const name = String((rp && rp.name) || '').trim();
+            if (!name) return;
+            const sName = rp.season ? String(rp.season).trim() : '';
+            const seasonId = (sName && seasonByName[sName]) ? seasonByName[sName].id : null;
+            const exist = presetByName[name];
+            if (exist) {
+                const t = exist.updatedAt ? new Date(exist.updatedAt).getTime() : 0;
+                const neverEdited = (!t || t === 0);
+                if (neverEdited) {
+                    if (Array.isArray(rp.attrs) && rp.attrs.length) exist.attrs = rp.attrs.slice();
+                    if (rp.type) exist.type = rp.type;
+                    if (seasonId !== null) exist.defaultSeasonId = seasonId;
+                }
+            } else {
+                const np = {
+                    id: nextPresetId++, name: name,
+                    attrs: Array.isArray(rp.attrs) ? rp.attrs.slice() : [],
+                    type: rp.type || 'normal',
+                    defaultSeasonId: seasonId,
+                    updatedAt: new Date(0).toISOString()
+                };
+                presetSpirits.push(np);
+                presetByName[name] = np;
+                added.spirits++;
+            }
+        });
+        return added;
+    }
+
+    // 把本地当前的赛季 + 预设精灵库导出成数据包（给发布者用）
+    function buildDataPack() {
+        const seasonNameById = {};
+        seasons.forEach(s => { seasonNameById[s.id] = s.name; });
+        return {
+            data_version: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            app: '异色逮捕计划',
+            schema: 1,
+            note: '预设精灵库与赛季数据。由软件「设置 → 软件更新 → 导出数据包」生成，覆盖仓库 data/game_data.json 即可发布。',
+            seasons: seasons.map(s => ({
+                name: s.name,
+                order: s.order || 0,
+                startDate: s.startDate || '',
+                endDate: s.endDate || ''
+            })),
+            spirits: presetSpirits.map(p => ({
+                name: p.name,
+                attrs: p.attrs || [],
+                type: p.type || 'normal',
+                season: (p.defaultSeasonId !== null && p.defaultSeasonId !== undefined)
+                    ? (seasonNameById[p.defaultSeasonId] || null) : null
+            }))
+        };
+    }
+
+    function exportDataPack() {
+        const pack = buildDataPack();
+        const st = document.getElementById('dataSyncStatus');
+        if (st) st.textContent = '已生成数据包：' + pack.spirits.length + ' 个精灵、' + pack.seasons.length + ' 个赛季';
+        if (pythonAPI) pythonAPI.exportDataPack(JSON.stringify(pack, null, 2));
+    }
+
+
     function doCheckUpdate(silent) {
         const repo = (document.getElementById('updateGithubRepo') || {}).value || '';
         const url = (document.getElementById('updateManifestUrl') || {}).value || '';
         saveUpdateConfig();
+        // 数据包（预设精灵库 / 赛季）与 exe 版本是两条独立通道：
+        // 素材数据更新不必重新打包 exe，所以每次检查更新都顺带同步一次
+        syncGameData(!!silent);
         const status = document.getElementById('updateStatus');
         if (!repo && !url) {
             if (status) status.textContent = '请先填写 GitHub 仓库 或 更新地址';
@@ -4201,7 +4383,13 @@ id="externalLink">🔗 打开查询工具</a>
         }
     }
 
-    function init(){ loadData(); initTabs(); bindActions(); initPythonAPI(); fullRender(); loadUpdateConfig(); maybeAutoCheckUpdate(); }
+    // 启动后静默同步一次游戏数据（不依赖是否配置了 exe 更新源）
+    function maybeAutoSyncData() {
+        if (!pythonAPI) return;
+        setTimeout(() => syncGameData(true), 2500);
+    }
+
+    function init(){ loadData(); initTabs(); bindActions(); initPythonAPI(); fullRender(); loadUpdateConfig(); loadDataConfig(); bindDataSyncButtons(); maybeAutoCheckUpdate(); maybeAutoSyncData(); }
     init();
 </script>
 </body>
@@ -4505,6 +4693,38 @@ class PythonAPI(QObject):
         threading.Thread(target=_run, daemon=True).start()
 
     @pyqtSlot(str)
+    def syncGameData(self, url):
+        """拉取游戏数据包（预设精灵库 + 赛季）并回传给前端合并（后台线程）。
+        数据包更新不需要重新打包 exe，用户点「检查更新」即可顺带拿到新赛季数据。"""
+        def _run():
+            try:
+                target = (url or "").strip()
+                if not target:
+                    raise ValueError("未配置数据包地址")
+                pack = http_get_json(target, timeout=20)
+                if not isinstance(pack, dict):
+                    raise ValueError("数据包格式错误（应为 JSON 对象）")
+                result = {"status": "ok", "pack": pack}
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    result = {"status": "error",
+                              "message": "仓库里还没有 data/game_data.json（发布者需先导出一份上传）"}
+                else:
+                    result = {"status": "error", "message": "HTTP 错误 %s：%s" % (e.code, e.reason)}
+            except Exception as e:
+                result = {"status": "error", "message": "数据同步失败：%s" % e}
+            try:
+                self.sigRunJs.emit("onGameDataFetched(%s)" % json.dumps(result, ensure_ascii=False))
+            except Exception:
+                pass
+        threading.Thread(target=_run, daemon=True).start()
+
+    @pyqtSlot(str)
+    def exportDataPack(self, jsonStr):
+        """导出数据包，供发布者覆盖仓库 data/game_data.json。"""
+        self._saveToFile(jsonStr, "game_data.json")
+
+    @pyqtSlot(str)
     def startUpdate(self, manifestJson):
         """根据 manifest 下载并自更新（后台线程，进度通过 onUpdateProgress / onUpdateDone 回调）。"""
         def _run():
@@ -4732,6 +4952,7 @@ def main():
     tmp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8')
     html = HTML_CONTENT.replace("__APP_VERSION__", APP_VERSION)
     html = html.replace("__DEFAULT_REPO__", DEFAULT_UPDATE_REPO)
+    html = html.replace("__DATA_URL__", DEFAULT_DATA_URL)
     tmp_file.write(html)
     tmp_file.close()
     

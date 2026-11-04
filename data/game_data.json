@@ -1,0 +1,22 @@
+{
+  "data_version": "2026-11-04T10:10:00.000Z",
+  "updated_at": "2026-11-04T10:10:00.000Z",
+  "app": "异色逮捕计划",
+  "schema": 1,
+  "note": "预设精灵库与赛季数据。由软件「设置 → 软件更新 → 导出数据包（发布用）」生成后覆盖本文件即可发布；用户点「检查更新」时会自动同步。合并规则：只增不删，用户手动改过的精灵不会被覆盖。",
+  "seasons": [],
+  "spirits": [
+    { "name": "燃薪虫", "attrs": ["草", "火"], "type": "normal", "season": null },
+    { "name": "呼呼猪", "attrs": ["冰", "地"], "type": "normal", "season": null },
+    { "name": "月牙雪熊", "attrs": ["冰", "幻"], "type": "wonder", "season": null },
+    { "name": "粉星仔", "attrs": ["幻"], "type": "wonder", "season": null },
+    { "name": "粉粉星", "attrs": ["电", "幻"], "type": "wonder", "season": null },
+    { "name": "空空颅", "attrs": ["幽", "幽"], "type": "normal", "season": null },
+    { "name": "绒仙子", "attrs": ["虫", "光"], "type": "normal", "season": null },
+    { "name": "疾光千兽", "attrs": ["光", "光"], "type": "wonder", "season": null },
+    { "name": "嗜光嗡嗡", "attrs": ["恶", "光"], "type": "normal", "season": null },
+    { "name": "奇丽草", "attrs": ["草", "草"], "type": "normal", "season": null },
+    { "name": "格兰球", "attrs": ["草", "草"], "type": "normal", "season": null },
+    { "name": "贝瑟", "attrs": ["机械", "火"], "type": "wonder", "season": null }
+  ]
+}
