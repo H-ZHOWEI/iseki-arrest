@@ -21,10 +21,13 @@ DROP_NAMES = {
     # 用不到的平台插件
     'qminimal.dll', 'qoffscreen.dll', 'qwebgl.dll',
     # 用不到的 Qt 模块
+    # 注意：qt5quickwidgets.dll 不能删！Qt5WebEngineWidgets.dll 静态导入它，
+    # 删掉后 import QtWebEngineWidgets 会直接报
+    # "DLL load failed while importing QtWebEngineWidgets: 找不到指定的模块"
     'qt5xmlpatterns.dll', 'qt5remoteobjects.dll', 'qt5bluetooth.dll',
     'qt5nfc.dll', 'qt5test.dll', 'qt5quicktest.dll', 'qt5sql.dll',
     'qt5sensors.dll', 'qt5serialport.dll', 'qt5webview.dll',
-    'qt5positioningquick.dll', 'qt5quickwidgets.dll',
+    'qt5positioningquick.dll',
     'qt5quick3d.dll', 'qt5quick3drender.dll', 'qt5quick3druntimerender.dll',
     'qt5quick3dassetimport.dll', 'qt5quick3dutils.dll',
     'qt5quickparticles.dll', 'qt5quickshapes.dll',
@@ -74,6 +77,30 @@ a.binaries = [x for x in a.binaries if not _should_drop(x[0])]
 a.datas = [x for x in a.datas if not _should_drop(x[0])]
 print('[trim] binaries %d -> %d, datas %d -> %d'
       % (_before_b, len(a.binaries), _before_d, len(a.datas)))
+
+# ---- 防错保险：这些文件是运行时必需的，裁掉任何一个都会导致
+#      "DLL load failed while importing QtWebEngineWidgets" 之类的启动崩溃，
+#      所以这里做一次硬校验，缺了就让打包直接失败，而不是打出不能用的 exe。
+REQUIRED_FILES = {
+    # PyQt5 的 QtWebEngine 导入链
+    'qt5webenginewidgets.dll', 'qt5webenginecore.dll', 'qt5webengine.dll',
+    'qt5webchannel.dll', 'qt5quickwidgets.dll', 'qt5quick.dll', 'qt5qml.dll',
+    'qt5qmlmodels.dll', 'qt5positioning.dll', 'qt5network.dll',
+    'qt5widgets.dll', 'qt5gui.dll', 'qt5core.dll', 'qt5printsupport.dll',
+    # Chromium 子进程与渲染资源
+    'qtwebengineprocess.exe', 'libegl.dll', 'libglesv2.dll',
+    'd3dcompiler_47.dll', 'qtwebengine_resources.pak', 'icudtl.dat',
+    'qwindows.dll',
+}
+
+_present = set()
+for _entry in list(a.binaries) + list(a.datas):
+    _present.add(_entry[0].replace('\\', '/').rsplit('/', 1)[-1].lower())
+
+_missing = sorted(REQUIRED_FILES - _present)
+if _missing:
+    raise SystemExit('[trim][FATAL] 裁剪掉了必需文件，exe 会启动失败: %s' % _missing)
+print('[trim] 必需文件校验通过（%d 项）' % len(REQUIRED_FILES))
 
 pyz = PYZ(a.pure)
 

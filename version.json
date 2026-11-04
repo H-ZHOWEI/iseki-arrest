@@ -3,7 +3,7 @@
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
   "notes": "v1.3.1：新增操作指引与 README；修复检查更新闪退、无 Release 误报 404、图标错误等问题。",
   "mandatory": false,
-  "sha256": "fc503a0328df4b100cdbff425bac40fa277252af69d50a1826160a8aa59ae60b",
+  "sha256": "79f0562d3e018b2321d0e559db8e107b39107cae12ee5c29a768a68206034ea3",
   "pub_date": "2026-11-04",
-  "size": 86710276
+  "size": 86743032
 }
