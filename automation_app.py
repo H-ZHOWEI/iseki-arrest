@@ -56,11 +56,13 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
+GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
 
 # ----------------------------- HTML 界面（前端逻辑）--------------------------------
 HTML_CONTENT = r"""<!DOCTYPE html>
@@ -1023,7 +1025,10 @@ id="externalLink">🔗 打开查询工具</a>
 
         <!-- 软件更新 -->
         <div class="card" id="card-update">
-            <div class="card-header"><h2>🔄 软件更新</h2></div>
+            <div class="card-header">
+                <h2 id="updateCardTitle" style="cursor:default; user-select:none;">🔄 软件更新</h2>
+                <span id="publisherBadge" style="display:none; font-size:0.68rem; color:#2b6e2f; background:#eef7e4; border:1px solid #cfe0bf; border-radius:10px; padding:2px 8px;">🔓 发布者模式</span>
+            </div>
             <div class="settings-grid">
                 <div style="grid-column: 1 / -1;">
                     <label>GitHub 仓库（owner/repo，走 Releases 时填写）</label>
@@ -1040,7 +1045,7 @@ id="externalLink">🔗 打开查询工具</a>
             </div>
 
             <div style="border-top:1px dashed #cfe0bf; margin-top:14px; padding-top:12px;">
-                <label style="font-weight:600;">📦 游戏数据（预设精灵库 / 赛季）</label>
+                <label style="font-weight:600;" id="gameDataLabel">📦 游戏数据（预设精灵库 / 赛季）</label>
                 <div style="margin-top:8px;">
                     <label>数据包直链（留空用默认；国内网络拉不动时可换成镜像，如 cdn.jsdelivr.net/gh/H-ZHOWEI/iseki-arrest@main/data/game_data.json）</label>
                     <input type="text" id="updateDataUrl" class="search-box" style="width:100%;" placeholder="https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json">
@@ -1049,8 +1054,24 @@ id="externalLink">🔗 打开查询工具</a>
                     <button id="syncDataBtn" class="small">检查数据更新</button>
                     <button id="testDataUrlBtn" class="small">测试地址</button>
                     <button id="importDataPackBtn" class="small">从文件导入数据包</button>
-                    <button id="exportDataPackBtn" class="small">导出数据包（发布用）</button>
                     <span id="dataSyncStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
+                </div>
+                <!-- 发布者工具：默认隐藏，在「🔄 软件更新」标题上连点 5 次显示 -->
+                <div id="publisherPanel" style="display:none; margin-top:12px; padding:10px 12px; background:#f4f9ec; border:1px solid #dfeacf; border-radius:12px;">
+                    <div style="font-size:0.78rem; font-weight:600; color:#2b6e2f; margin-bottom:6px;">🔐 发布者工具（仅本机可见）</div>
+                    <div>
+                        <label>GitHub Token（需该仓库 Contents 读写权限；只保存在本机，换机器要重填）</label>
+                        <input type="password" id="publishToken" class="search-box" style="width:100%;" placeholder="ghp_xxxxxxxx 或 github_pat_xxxxxxxx" autocomplete="off">
+                    </div>
+                    <div style="display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+                        <button id="exportDataPackBtn" class="small">导出数据包（发布用）</button>
+                        <button id="publishDataPackBtn" class="small">📤 上传数据包到 GitHub</button>
+                        <span id="publishStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
+                    </div>
+                    <div style="font-size:0.7rem; color:#7d9870; margin-top:6px; line-height:1.5;">
+                        上传会直接提交到仓库 <b>data/game_data.json</b>（分支 main），用户下次检查更新即可收到新赛季。<br>
+                        注意：<b>只有「新赛季」及其中的精灵会被推送给用户</b>，给老赛季补精灵不会生效。
+                    </div>
                 </div>
                 <div class="badge" style="margin-top:8px;">
                     💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
@@ -4191,6 +4212,18 @@ id="externalLink">🔗 打开查询工具</a>
         if (sb) sb.onclick = function () { checkGameDataUpdates(false); };
         const eb = document.getElementById('exportDataPackBtn');
         if (eb) eb.onclick = function () { exportDataPack(); };
+        const pb = document.getElementById('publishDataPackBtn');
+        if (pb) pb.onclick = function () { publishDataPack(); };
+        const tk = document.getElementById('publishToken');
+        if (tk) {
+            tk.value = localStorage.getItem(PUBLISH_TOKEN_KEY) || '';
+            tk.addEventListener('change', function () {
+                localStorage.setItem(PUBLISH_TOKEN_KEY, tk.value.trim());
+            });
+            tk.addEventListener('blur', function () {
+                localStorage.setItem(PUBLISH_TOKEN_KEY, tk.value.trim());
+            });
+        }
         const ib = document.getElementById('importDataPackBtn');
         if (ib) ib.onclick = function () {
             if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
@@ -4209,6 +4242,134 @@ id="externalLink">🔗 打开查询工具</a>
         const du = document.getElementById('updateDataUrl');
         if (du) du.addEventListener('change', function () { saveDataPackUrl(); loadDataConfig(); });
         if (du) du.addEventListener('blur', function () { saveDataPackUrl(); loadDataConfig(); });
+
+        applyPublisherMode(isPublisherMode());
+        bindPublisherUnlock(document.getElementById('updateCardTitle'));
+        bindPublisherUnlock(document.getElementById('gameDataLabel'));
+    }
+
+    // ===== 发布者模式（隐藏功能：在标题上连点 5 次显示） =====
+    // 普通用户用不到「导出数据包 / 上传到 GitHub」，藏起来避免误点，也让界面干净。
+    const PUBLISHER_KEY = 'publisher_mode';
+    const PUBLISH_TOKEN_KEY = 'gh_publish_token';
+    let pendingPublishPack = null;
+
+    function isPublisherMode() { return localStorage.getItem(PUBLISHER_KEY) === '1'; }
+
+    function applyPublisherMode(on) {
+        localStorage.setItem(PUBLISHER_KEY, on ? '1' : '0');
+        const panel = document.getElementById('publisherPanel');
+        if (panel) panel.style.display = on ? 'block' : 'none';
+        const badge = document.getElementById('publisherBadge');
+        if (badge) badge.style.display = on ? 'inline-block' : 'none';
+    }
+
+    function bindPublisherUnlock(el) {
+        if (!el || el.dataset.pubBound === '1') return;
+        el.dataset.pubBound = '1';
+        let count = 0, last = 0;
+        el.addEventListener('click', function () {
+            const now = Date.now();
+            if (now - last > 1200) count = 0;   // 间隔超过 1.2 秒重新计数
+            last = now;
+            count++;
+            if (count < 5) return;
+            count = 0;
+            const on = !isPublisherMode();
+            applyPublisherMode(on);
+            const st = document.getElementById('publishStatus');
+            if (st) st.textContent = on ? '已显示发布者工具' : '';
+            if (!on) {
+                const s2 = document.getElementById('dataSyncStatus');
+                if (s2) s2.textContent = '已隐藏发布者工具';
+            }
+        });
+    }
+
+    // 上传前先做本地检查，再弹窗确认——避免把「没有赛季」的空包推上去
+    function publishDataPack() {
+        if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
+        const tokenEl = document.getElementById('publishToken');
+        const token = (tokenEl ? tokenEl.value : (localStorage.getItem(PUBLISH_TOKEN_KEY) || '')).trim();
+        const st = document.getElementById('publishStatus');
+        if (!token) {
+            if (st) st.textContent = '请先填写 GitHub Token';
+            if (tokenEl) tokenEl.focus();
+            return;
+        }
+        localStorage.setItem(PUBLISH_TOKEN_KEY, token);
+
+        const pack = buildDataPack();
+        if (!pack.seasons.length) {
+            if (st) st.textContent = '本地没有赛季，已取消上传';
+            alert('你本地还没有任何赛季，用户端收不到内容。\n请先在「赛季管理」新增赛季，并把精灵挂到该赛季下再上传。');
+            return;
+        }
+        const noSeason = pack.spirits.filter(p => !p.season).length;
+        showPublishConfirm(pack, noSeason);
+    }
+
+    function showPublishConfirm(pack, noSeason) {
+        const old = document.getElementById('publishConfirmModal');
+        if (old) old.remove();
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'publishConfirmModal';
+        modal.innerHTML = '<div class="modal-content" style="max-width:460px;">'
+            + '<h3 style="margin-top:0;">上传数据包到 GitHub</h3>'
+            + '<p style="font-size:0.78rem; color:#5a7a4a; line-height:1.6;">'
+            + '本次数据包：<b>' + pack.seasons.length + '</b> 个赛季、<b>' + pack.spirits.length + '</b> 只精灵。<br>'
+            + '将提交到仓库 <b>data/game_data.json</b>（分支 main）。</p>'
+            + (noSeason
+                ? '<p style="font-size:0.75rem; color:#a8622f; background:#fdf4ea; border:1px solid #f0dcc4;'
+                  + ' border-radius:10px; padding:8px 10px; line-height:1.5;">'
+                  + '注意：其中 <b>' + noSeason + '</b> 只精灵没有设置所属赛季，'
+                  + '这些精灵<b>不会推送给用户</b>。</p>'
+                : '')
+            + '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
+            + '用户端只会收到<b>新赛季</b>及其中的精灵；老赛季的改动不会推送。</p>'
+            + '<div style="display:flex; gap:8px; margin-top:14px;">'
+            + '<button id="confirmPublishBtn" class="primary">确认上传</button>'
+            + '<button id="cancelPublishBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
+            + ' color:#2b6e2f; border-radius:14px; padding:8px 16px; cursor:pointer; font-weight:600;">取消</button>'
+            + '</div></div>';
+        document.body.appendChild(modal);
+        modal.querySelector('#cancelPublishBtn').onclick = function () { modal.remove(); };
+        modal.querySelector('#confirmPublishBtn').onclick = function () {
+            modal.remove();
+            doPublish(pack);
+        };
+    }
+
+    function doPublish(pack) {
+        const st = document.getElementById('publishStatus');
+        const token = (localStorage.getItem(PUBLISH_TOKEN_KEY) || '').trim();
+        const repo = ((document.getElementById('updateGithubRepo') || {}).value || '').trim()
+                     || 'H-ZHOWEI/iseki-arrest';
+        pendingPublishPack = pack;
+        if (st) st.textContent = '正在上传…';
+        try {
+            pythonAPI.publishDataPack(JSON.stringify(pack), token, repo, 'data/game_data.json', 'main');
+        } catch (e) {
+            if (st) st.textContent = '上传失败：' + e;
+        }
+    }
+
+    function onDataPackPublished(res) {
+        const st = document.getElementById('publishStatus');
+        const pack = pendingPublishPack;
+        pendingPublishPack = null;
+        if (!res || res.status === 'error') {
+            if (st) st.textContent = '上传失败：' + ((res && res.message) || '未知错误');
+            return;
+        }
+        // 已发布的版本号落到本地，避免本机再次提示「有新赛季」
+        if (pack && pack.data_version) localStorage.setItem(DATA_VERSION_KEY, String(pack.data_version));
+        loadDataConfig();
+        if (st) {
+            st.textContent = '已上传（commit ' + (res.commit || '?') + '，'
+                + (res.bytes || 0) + ' 字节' + (res.created ? '，新建文件' : '') + '）';
+        }
     }
 
     // 检查数据包是否有新增赛季 / 精灵（只拉取，不改动任何本地数据）
@@ -4795,6 +4956,83 @@ def http_get_json_multi(url, timeout=12, max_candidates=None):
     raise RuntimeError("；".join(uniq) if uniq else "无可用地址")
 
 
+def github_put_file(repo, path, branch, token, body, message, timeout=60):
+    """用 GitHub Contents API 新建/覆盖仓库里的一个文件（发布者上传数据包用）。
+    body: bytes；返回 {commit, url, created}；失败抛 RuntimeError（带中文原因）。
+    注意：只做「整文件覆盖」，不做增量 diff——数据包本来就是一整份 JSON。"""
+    repo = (repo or '').strip().strip('/')
+    path = (path or '').strip().lstrip('/')
+    branch = (branch or 'main').strip() or 'main'
+    token = (token or '').strip()
+    if not token:
+        raise RuntimeError("没有填写 GitHub Token")
+    if not re.match(r'^[\w.\-]+/[\w.\-]+$', repo):
+        raise RuntimeError("仓库格式应为 owner/repo，例如 H-ZHOWEI/iseki-arrest")
+    if not path:
+        raise RuntimeError("仓库内路径为空")
+
+    api_url = "%s/repos/%s/contents/%s" % (GITHUB_API, repo, urllib.parse.quote(path, safe='/'))
+    headers = {
+        'Authorization': 'token %s' % token,
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'IsekiArrest-Publisher',
+        'Content-Type': 'application/json; charset=utf-8',
+    }
+
+    # 1) 取现有文件 sha（不存在则新建）
+    sha = None
+    try:
+        req = urllib.request.Request(
+            api_url + '?ref=' + urllib.parse.quote(branch, safe=''), headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            sha = json.loads(r.read().decode('utf-8')).get('sha')
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            _raise_github_error(e)
+
+    # 2) PUT 提交
+    payload = {
+        'message': message,
+        'content': base64.b64encode(body).decode('ascii'),
+        'branch': branch,
+    }
+    if sha:
+        payload['sha'] = sha
+    try:
+        req = urllib.request.Request(
+            api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='PUT')
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            res = json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        _raise_github_error(e)
+
+    return {
+        'commit': ((res.get('commit') or {}).get('sha') or '')[:7],
+        'url': (res.get('content') or {}).get('html_url', ''),
+        'created': sha is None,
+    }
+
+
+def _raise_github_error(e):
+    """把 GitHub API 的 HTTP 错误翻译成能照着做的中文提示。"""
+    detail = ''
+    try:
+        detail = json.loads(e.read().decode('utf-8')).get('message', '')
+    except Exception:
+        pass
+    if e.code == 401:
+        hint = "Token 无效或已过期，请重新生成一个"
+    elif e.code == 403:
+        hint = "权限不足或触发了限制：Token 需要该仓库的 Contents 读写权限"
+    elif e.code == 404:
+        hint = "仓库 / 分支 / 路径不存在，或 Token 无权访问该仓库"
+    elif e.code in (409, 422):
+        hint = "文件刚被改动过（sha 冲突），请再点一次上传"
+    else:
+        hint = "HTTP %s" % e.code
+    raise RuntimeError(hint + (('：' + detail) if detail else ''))
+
+
 def http_download(url, dest, timeout=120, progress_cb=None):
     req = urllib.request.Request(url, headers={'User-Agent': 'IsekiArrest-Updater'})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -5182,6 +5420,46 @@ class PythonAPI(QObject):
                         "onUpdateError(%s)" % json.dumps({"message": str(e)}, ensure_ascii=False))
                 except Exception:
                     pass
+        threading.Thread(target=_run, daemon=True).start()
+
+    @pyqtSlot(str, str, str, str, str)
+    def publishDataPack(self, packJson, token, repo, path, branch):
+        """把数据包直接提交到 GitHub 仓库（发布者专用，走 Contents API）。
+        packJson: 数据包 JSON；token: GitHub PAT（需 contents 写入权限）；
+        repo: owner/repo；path: 仓库内路径（如 data/game_data.json）；branch: 分支。"""
+        def _emit(obj):
+            try:
+                self.sigRunJs.emit("onDataPackPublished(%s)" % json.dumps(obj, ensure_ascii=False))
+            except Exception:
+                pass
+
+        def _run():
+            try:
+                try:
+                    pack = json.loads(packJson)
+                except Exception as e:
+                    raise RuntimeError("数据包 JSON 解析失败：%s" % e)
+                if not isinstance(pack, dict) or not isinstance(pack.get('seasons'), list):
+                    raise RuntimeError("数据包格式错误（缺少 seasons 数组）")
+                seasons = pack.get('seasons') or []
+                spirits = pack.get('spirits') or []
+                if not seasons:
+                    raise RuntimeError("数据包里没有任何赛季，用户端收不到内容，已取消上传")
+                body = json.dumps(pack, ensure_ascii=False, indent=2).encode('utf-8')
+                msg = "data: 更新数据包（%d 赛季 / %d 精灵）" % (len(seasons), len(spirits))
+                info = github_put_file(repo, path or 'data/game_data.json', branch or 'main',
+                                       token, body, msg)
+                _emit({
+                    'status': 'ok',
+                    'commit': info.get('commit', ''),
+                    'url': info.get('url', ''),
+                    'created': info.get('created', False),
+                    'bytes': len(body),
+                    'seasons': len(seasons),
+                    'spirits': len(spirits),
+                })
+            except Exception as e:
+                _emit({'status': 'error', 'message': str(e)})
         threading.Thread(target=_run, daemon=True).start()
 
     def _injectAllData(self, content):
