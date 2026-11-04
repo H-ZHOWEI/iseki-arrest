@@ -58,7 +58,7 @@ import urllib.request
 import urllib.error
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 
@@ -1054,10 +1054,11 @@ id="externalLink">🔗 打开查询工具</a>
                 </div>
                 <div class="badge" style="margin-top:8px;">
                     💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
-                    点「检查更新」时<b>先查软件版本，再查赛季 / 精灵是否有新增</b>；也可单独点「检查数据更新」。<br>
-                    主地址（GitHub raw）读超时会<b>自动换 jsDelivr / gitmirror 镜像</b>重试，仍失败可点按钮再试一次。<br>
-                    发现新增时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只增不删、只填空不覆盖</b>——只新增本地没有的赛季/精灵，本地已有条目（包括你改过的属性和自己加的内容）一律不覆盖、不删除。<br>
-                    发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新增提示。
+                    点「检查更新」时<b>先查软件版本，再查有没有新赛季</b>；也可单独点「检查数据更新」。<br>
+                    主地址（GitHub raw）拉不动时会<b>自动换 github.com 直链 / jsDelivr / ghproxy 等镜像</b>重试，也可点「测试地址」逐条探测。<br>
+                    发现新赛季时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只加新赛季及其中的精灵</b>——<b>已有赛季不参与比对</b>，你原有的赛季、精灵（包括你改过的和手动新增的）一律不动、不删。<br>
+                    发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新赛季提示。<br>
+                    <span style="color:#8a9a80;">提示：用户只会收到「新赛季」及其精灵，所以给老赛季补精灵不会推送给别人。</span>
                 </div>
             </div>
             <div class="badge" style="margin-top:8px;">💡 默认通过仓库根目录的 <b>version.json</b> 清单检查更新，其 <b>download_url</b> 指向仓库内 <b>dist/异色逮捕计划.exe</b>（与「喵想奇记」一致：把 exe 直接提交进仓库）。发布新版时，先把新 exe 放进 <b>dist/</b> 并提交，再更新 <b>version.json</b> 的 version 与 sha256 即可；也可改用 Releases（在仓库 Releases 上传同名 exe 附件）。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
@@ -4150,7 +4151,8 @@ id="externalLink">🔗 打开查询工具</a>
     // =========================================================================
     // 游戏数据同步（预设精灵库 + 赛季）
     // 数据包放在仓库 data/game_data.json，检查软件更新时顺带拉取，避免每个赛季都要重新打包 exe
-    // 流程：拉取 → 差异检测（只读） → 有新增才弹窗询问 → 用户同意后只增不删地合入本地
+    // 流程：拉取 → 差异检测（只读，只看新赛季） → 有新赛季才弹窗询问 → 用户同意后只加新赛季地合入本地
+    // 注意：老赛季的数据不参与比对也不写入——发布者老赛季的精灵库可能和用户不一样
     // =========================================================================
     const DATA_VERSION_KEY = 'game_data_version';
     let dataSyncInFlight = false;
@@ -4294,18 +4296,24 @@ id="externalLink">🔗 打开查询工具</a>
         });
     }
 
-    // 差异检测：纯只读，判断远端数据包里有哪些本地还没有的赛季 / 精灵
+    // 差异检测：纯只读。
+    // 只比对「本地没有的新赛季」以及这些新赛季里的异色精灵；
+    // 已有赛季的数据完全不参与比对——发布者老赛季的精灵库可能和用户不一样，
+    // 拿老赛季做比对会把差异当成「新增」塞给用户，所以直接不看。
     function diffGameData(pack) {
         const knownSeasons = {};
         const knownSpirits = {};
         seasons.forEach(s => { if (s && s.name) knownSeasons[String(s.name).trim()] = true; });
         presetSpirits.forEach(p => { if (p && p.name) knownSpirits[String(p.name).trim()] = true; });
 
-        const res = { seasons: [], spirits: [] };
+        const res = { seasons: [], spirits: [], skipped: 0 };
+
+        const newSeasonNames = {};
         (pack.seasons || []).forEach(rs => {
             const name = String((rs && rs.name) || '').trim();
             if (!name || knownSeasons[name]) return;
             knownSeasons[name] = true;      // 远端包内同名只算一次
+            newSeasonNames[name] = true;
             res.seasons.push({
                 name: name,
                 startDate: rs.startDate || '',
@@ -4313,13 +4321,18 @@ id="externalLink">🔗 打开查询工具</a>
                 order: rs.order
             });
         });
+
         (pack.spirits || []).forEach(rp => {
             const name = String((rp && rp.name) || '').trim();
-            if (!name || knownSpirits[name]) return;
+            if (!name) return;
+            const sName = rp.season ? String(rp.season).trim() : '';
+            // 只收新赛季里的精灵；老赛季、或没写赛季的，一律跳过
+            if (!newSeasonNames[sName]) { res.skipped++; return; }
+            if (knownSpirits[name]) return;     // 本地已有同名精灵，不覆盖、不重复加
             knownSpirits[name] = true;
             res.spirits.push({
                 name: name,
-                season: rp.season ? String(rp.season).trim() : '',
+                season: sName,
                 type: rp.type || 'normal'
             });
         });
@@ -4357,7 +4370,7 @@ id="externalLink">🔗 打开查询工具</a>
             loadDataConfig();
             if (st) {
                 st.textContent = ((remoteVer && remoteVer !== localVer)
-                    ? '数据已是最新（无新增赛季 / 精灵）' : '数据已是最新')
+                    ? '数据已是最新（没有新赛季）' : '数据已是最新')
                     + (fromFile ? '（来自本地文件）'
                         : (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : ''));
             }
@@ -4367,8 +4380,8 @@ id="externalLink">🔗 打开查询工具</a>
         // 有新增：只记录待确认，暂不写入本地
         pendingDataPack = pack;
         if (st) {
-            st.textContent = '发现新增 ' + diff.spirits.length + ' 个精灵、' + diff.seasons.length
-                + ' 个赛季，等待你确认…'
+            st.textContent = '发现新赛季 ' + diff.seasons.length + ' 个（含 '
+                + diff.spirits.length + ' 个异色精灵），等待你确认…'
                 + (fromFile ? '（来自本地文件）' : (viaMirror ? '（经镜像获取）' : ''));
         }
         showDataSyncDialog(diff, verShow);
@@ -4406,13 +4419,17 @@ id="externalLink">🔗 打开查询工具</a>
             : '';
 
         modal.innerHTML = '<div class="modal-content" style="max-width:480px;">'
-            + '<h3 style="margin-top:0;">发现新的游戏数据</h3>'
+            + '<h3 style="margin-top:0;">发现新赛季数据</h3>'
             + '<p style="font-size:0.76rem; color:#5a7a4a; line-height:1.5;">'
             + (verShow ? '数据版本：' + escapeHtml(verShow) + '<br>' : '')
-            + '只会把下面这些<b>新增</b>内容加到你的本地数据，'
-            + '你已有的赛季、精灵和抓取记录<b>不会被覆盖或删除</b>。</p>'
+            + '只会把下面这些<b>新赛季</b>和它们里面的异色精灵加进来；'
+            + '<b>已有赛季不参与比对</b>，你原有的赛季、精灵和抓取记录不会被改动。</p>'
             + '<div style="max-height:250px; overflow:auto; background:#f6faef; border:1px solid #e6efda; border-radius:14px; padding:8px 10px;">'
             + seasonHtml + spiritHtml + '</div>'
+            + (diff.skipped
+                ? '<div style="margin-top:8px; font-size:0.7rem; color:#8a9a80; line-height:1.4;">'
+                  + '另有 ' + diff.skipped + ' 个精灵属于已有赛季，本次<b>不比对、不导入</b>。</div>'
+                : '')
             + '<div style="display:flex; gap:8px; margin-top:14px;">'
             + '<button id="applyDataBtn" class="primary">更新到本地</button>'
             + '<button id="skipDataBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
@@ -4452,46 +4469,36 @@ id="externalLink">🔗 打开查询工具</a>
         closeDataSyncDialog();
         const st = document.getElementById('dataSyncStatus');
         if (st) {
-            st.textContent = '已更新：新增 ' + added.spirits + ' 个精灵、' + added.seasons
-                + ' 个赛季' + (added.filled ? '，补齐 ' + added.filled + ' 项空缺' : '')
-                + '（原有数据已保留）';
+            st.textContent = '已更新：新增 ' + added.seasons + ' 个赛季、' + added.spirits
+                + ' 个异色精灵（原有数据未改动）';
         }
     }
 
-    // 合并规则：只增不删、只填空不覆盖
-    // - 赛季：本地没有 → 新增；已存在 → 仅在本地字段为空时补齐，绝不覆盖用户改过的值
-    // - 精灵：本地没有 → 新增；已存在 → 仅在本地字段为空时补齐（如 attrs 为空）
+    // 合并规则：只加「新赛季」与其内的精灵，其它一律不动
+    // - 赛季：本地没有 → 新增；已存在 → 完全不碰（不补日期、不改顺序，发布者与用户的老赛季数据可能不同）
+    // - 精灵：只处理「本次新加进来的赛季」里的精灵，且同名已存在则跳过（不覆盖、不重复）
     function mergeGameData(pack) {
         const added = { spirits: 0, seasons: 0, filled: 0 };
         const seasonByName = {};
         seasons.forEach(s => { if (s && s.name) seasonByName[String(s.name).trim()] = s; });
 
+        const newSeasonNames = {};
         (pack.seasons || []).forEach(rs => {
             const name = String((rs && rs.name) || '').trim();
-            if (!name) return;
-            const exist = seasonByName[name];
-            if (exist) {
-                const orderEmpty = (exist.order === undefined || exist.order === null
-                                    || exist.order === '' || exist.order === 0);
-                if (orderEmpty && rs.order !== undefined && rs.order !== null && rs.order !== '') {
-                    exist.order = rs.order; added.filled++;
-                }
-                if (!exist.startDate && rs.startDate) { exist.startDate = rs.startDate; added.filled++; }
-                if (!exist.endDate && rs.endDate) { exist.endDate = rs.endDate; added.filled++; }
-                if (!Array.isArray(exist.categories)) exist.categories = [];
-                if (!exist.categoryNotes) exist.categoryNotes = {};
-            } else {
-                const ns = {
-                    id: nextSeasonId++, name: name,
-                    order: (rs.order === undefined || rs.order === null) ? 0 : rs.order,
-                    startDate: rs.startDate || '', endDate: rs.endDate || '',
-                    categories: [], categoryNotes: {}
-                };
-                seasons.push(ns);
-                seasonByName[name] = ns;
-                added.seasons++;
-            }
+            if (!name || seasonByName[name]) return;
+            const ns = {
+                id: nextSeasonId++, name: name,
+                order: (rs.order === undefined || rs.order === null) ? 0 : rs.order,
+                startDate: rs.startDate || '', endDate: rs.endDate || '',
+                categories: [], categoryNotes: {}
+            };
+            seasons.push(ns);
+            seasonByName[name] = ns;
+            newSeasonNames[name] = true;
+            added.seasons++;
         });
+
+        if (!added.seasons) return added;       // 没有新赛季就什么都不加
 
         const presetByName = {};
         presetSpirits.forEach(p => { if (p && p.name) presetByName[String(p.name).trim()] = p; });
@@ -4500,28 +4507,18 @@ id="externalLink">🔗 打开查询工具</a>
             const name = String((rp && rp.name) || '').trim();
             if (!name) return;
             const sName = rp.season ? String(rp.season).trim() : '';
-            const seasonId = (sName && seasonByName[sName]) ? seasonByName[sName].id : null;
-            const exist = presetByName[name];
-            if (exist) {
-                if ((!Array.isArray(exist.attrs) || !exist.attrs.length)
-                    && Array.isArray(rp.attrs) && rp.attrs.length) {
-                    exist.attrs = rp.attrs.slice(); added.filled++;
-                }
-                if (!exist.type && rp.type) { exist.type = rp.type; added.filled++; }
-                const sidEmpty = (exist.defaultSeasonId === null || exist.defaultSeasonId === undefined);
-                if (sidEmpty && seasonId !== null) { exist.defaultSeasonId = seasonId; added.filled++; }
-            } else {
-                const np = {
-                    id: nextPresetId++, name: name,
-                    attrs: Array.isArray(rp.attrs) ? rp.attrs.slice() : [],
-                    type: rp.type || 'normal',
-                    defaultSeasonId: seasonId,
-                    updatedAt: new Date(0).toISOString()
-                };
-                presetSpirits.push(np);
-                presetByName[name] = np;
-                added.spirits++;
-            }
+            if (!newSeasonNames[sName]) return;     // 老赛季 / 未写赛季的精灵不导入
+            if (presetByName[name]) return;         // 本地已有同名精灵，保持原样
+            const np = {
+                id: nextPresetId++, name: name,
+                attrs: Array.isArray(rp.attrs) ? rp.attrs.slice() : [],
+                type: rp.type || 'normal',
+                defaultSeasonId: seasonByName[sName].id,
+                updatedAt: new Date(0).toISOString()
+            };
+            presetSpirits.push(np);
+            presetByName[name] = np;
+            added.spirits++;
         });
         return added;
     }
