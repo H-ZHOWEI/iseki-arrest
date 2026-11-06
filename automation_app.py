@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -4458,10 +4458,13 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     // 差异检测：纯只读。
-    // 只比对「本地没有的新赛季」以及这些新赛季里的异色精灵；
-    // 已有赛季的数据完全不参与比对——发布者老赛季的精灵库可能和用户不一样，
-    // 拿老赛季做比对会把差异当成「新增」塞给用户，所以直接不看。
+    // 普通模式：只比对「本地没有的新赛季」以及这些新赛季里的异色精灵；
+    //   已有赛季的数据完全不参与比对——发布者老赛季的精灵库可能和用户不一样，
+    //   拿老赛季做比对会把差异当成「新增」塞给用户，所以直接不看。
+    // 发布者模式（isPublisherMode）：与数据包全量比对，老赛季里本地缺失的精灵
+    //   也列为「补回」（restore: true），方便发布者误删后从数据包恢复。
     function diffGameData(pack) {
+        const pub = isPublisherMode();
         const knownSeasons = {};
         const knownSpirits = {};
         seasons.forEach(s => { if (s && s.name) knownSeasons[String(s.name).trim()] = true; });
@@ -4487,15 +4490,22 @@ id="externalLink">🔗 打开查询工具</a>
             const name = String((rp && rp.name) || '').trim();
             if (!name) return;
             const sName = rp.season ? String(rp.season).trim() : '';
-            // 只收新赛季里的精灵；老赛季、或没写赛季的，一律跳过
-            if (!newSeasonNames[sName]) { res.skipped++; return; }
-            if (knownSpirits[name]) return;     // 本地已有同名精灵，不覆盖、不重复加
-            knownSpirits[name] = true;
-            res.spirits.push({
-                name: name,
-                season: sName,
-                type: rp.type || 'normal'
-            });
+            if (newSeasonNames[sName]) {
+                // 新赛季里的精灵：本地没有 → 新增
+                if (knownSpirits[name]) return;     // 本地已有同名精灵，不覆盖、不重复加
+                knownSpirits[name] = true;
+                res.spirits.push({ name: name, season: sName, type: rp.type || 'normal', restore: false });
+                return;
+            }
+            if (pub) {
+                // 发布者模式：老赛季（含未写赛季）里本地缺失的精灵 → 可补回
+                if (knownSpirits[name]) return;
+                knownSpirits[name] = true;
+                res.spirits.push({ name: name, season: sName, type: rp.type || 'normal', restore: true });
+                return;
+            }
+            if (knownSpirits[name]) return;     // 本地已有同名精灵，无需处理
+            res.skipped++;      // 普通模式：老赛季 / 未写赛季的精灵一律跳过
         });
         return res;
     }
@@ -4531,7 +4541,10 @@ id="externalLink">🔗 打开查询工具</a>
             loadDataConfig();
             if (st) {
                 st.textContent = ((remoteVer && remoteVer !== localVer)
-                    ? '数据已是最新（没有新赛季）' : '数据已是最新')
+                    ? (isPublisherMode()
+                        ? '数据已是最新（本地与数据包内容一致，无缺失项）'
+                        : '数据已是最新（没有新赛季）')
+                    : '数据已是最新')
                     + (fromFile ? '（来自本地文件）'
                         : (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : ''));
             }
@@ -4540,9 +4553,12 @@ id="externalLink">🔗 打开查询工具</a>
 
         // 有新增：只记录待确认，暂不写入本地
         pendingDataPack = pack;
+        const restoreCount = diff.spirits.filter(p => p.restore).length;
         if (st) {
-            st.textContent = '发现新赛季 ' + diff.seasons.length + ' 个（含 '
-                + diff.spirits.length + ' 个异色精灵），等待你确认…'
+            st.textContent = '发现新赛季 ' + diff.seasons.length + ' 个、异色精灵 '
+                + (diff.spirits.length - restoreCount) + ' 个'
+                + (restoreCount ? '（含可补回的缺失精灵 ' + restoreCount + ' 个）' : '')
+                + '，等待你确认…'
                 + (fromFile ? '（来自本地文件）' : (viaMirror ? '（经镜像获取）' : ''));
         }
         showDataSyncDialog(diff, verShow);
@@ -4571,11 +4587,26 @@ id="externalLink">🔗 打开查询工具</a>
                     (s.startDate || s.endDate) ? ((s.startDate || '?') + ' ~ ' + (s.endDate || '?')) : '')).join('')
               + '</div>'
             : '';
+        const hasRestore = diff.spirits.some(p => p.restore);
         const spiritHtml = diff.spirits.length
             ? '<div style="margin-top:10px;">'
-              + '<div style="font-size:0.78rem; color:#2b6e2f; font-weight:600; margin-bottom:4px;">新增异色精灵 '
-              + diff.spirits.length + ' 个</div>'
-              + diff.spirits.map(p => chip(p.name, p.season || '')).join('')
+              + '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">'
+              + '<div style="font-size:0.78rem; color:#2b6e2f; font-weight:600;">异色精灵 '
+              + diff.spirits.length + ' 个<span style="font-weight:400; color:#7d9870;">（勾选才会添加）</span></div>'
+              + '<a href="javascript:void(0)" id="toggleAllSpiritsLink" style="font-size:0.7rem; color:#4a7a3a;">全不选</a>'
+              + '</div>'
+              + diff.spirits.map(p =>
+                    '<label style="display:flex; align-items:center; gap:7px; padding:3px 2px;'
+                    + ' font-size:0.78rem; color:#2f4a24; cursor:pointer;">'
+                    + '<input type="checkbox" checked data-spirit="' + escapeHtml(p.name) + '">'
+                    + '<span>' + escapeHtml(p.name)
+                    + (p.season ? '<em style="font-style:normal; color:#7d9870; font-size:0.68rem;">　'
+                        + escapeHtml(p.season) + '</em>' : '')
+                    + (p.restore
+                        ? '<span style="display:inline-block; background:#fff4e0; border:1px solid #eccf9e;'
+                          + ' color:#a06a12; border-radius:10px; padding:0 7px; font-size:0.66rem; margin-left:6px;">补回</span>'
+                        : '')
+                    + '</span></label>').join('')
               + '</div>'
             : '';
 
@@ -4583,8 +4614,12 @@ id="externalLink">🔗 打开查询工具</a>
             + '<h3 style="margin-top:0;">发现新赛季数据</h3>'
             + '<p style="font-size:0.76rem; color:#5a7a4a; line-height:1.5;">'
             + (verShow ? '数据版本：' + escapeHtml(verShow) + '<br>' : '')
-            + '只会把下面这些<b>新赛季</b>和它们里面的异色精灵加进来；'
-            + '<b>已有赛季不参与比对</b>，你原有的赛季、精灵和抓取记录不会被改动。</p>'
+            + (hasRestore
+                ? '当前处于<b>发布者模式</b>：与数据包全量比对——除新赛季外，还会列出数据包里有、'
+                  + '而你本地缺失的精灵（含老赛季，带「补回」标记），勾选后即可补回误删的精灵。'
+                : '只会把下面这些<b>新赛季</b>和它们里面的异色精灵加进来；'
+                  + '<b>已有赛季不参与比对</b>，你原有的赛季、精灵和抓取记录不会被改动。')
+            + '</p>'
             + '<div style="max-height:250px; overflow:auto; background:#f6faef; border:1px solid #e6efda; border-radius:14px; padding:8px 10px;">'
             + seasonHtml + spiritHtml + '</div>'
             + (diff.skipped
@@ -4597,6 +4632,24 @@ id="externalLink">🔗 打开查询工具</a>
             + ' color:#2b6e2f; border-radius:14px; padding:8px 16px; cursor:pointer; font-weight:600;">以后再说</button>'
             + '</div></div>';
         document.body.appendChild(modal);
+
+        // 勾选联动：按钮文字实时显示将写入的条目数；全不选/全选切换
+        const applyBtn = modal.querySelector('#applyDataBtn');
+        const spiritBoxes = modal.querySelectorAll('input[data-spirit]');
+        function refreshApplyLabel() {
+            let n = diff.seasons.length;
+            spiritBoxes.forEach(cb => { if (cb.checked) n++; });
+            applyBtn.textContent = n ? ('更新到本地（' + n + ' 项）') : '标记已读，不添加';
+        }
+        spiritBoxes.forEach(cb => { cb.addEventListener('change', refreshApplyLabel); });
+        const toggleLink = modal.querySelector('#toggleAllSpiritsLink');
+        if (toggleLink) toggleLink.onclick = function () {
+            const allChecked = Array.from(spiritBoxes).every(cb => cb.checked);
+            spiritBoxes.forEach(cb => { cb.checked = !allChecked; });
+            toggleLink.textContent = allChecked ? '全选' : '全不选';
+            refreshApplyLabel();
+        };
+        refreshApplyLabel();
 
         modal.querySelector('#applyDataBtn').onclick = function () { applyGameData(); };
         modal.querySelector('#skipDataBtn').onclick = function () {
@@ -4614,12 +4667,18 @@ id="externalLink">🔗 打开查询工具</a>
         if (old) old.remove();
     }
 
-    // 用户确认后才真正写入本地
+    // 用户确认后才真正写入本地。弹窗里取消勾选的精灵不会添加；
+    // 全部取消时仅标记「已读」，下次检查不会再提示这一批。
     function applyGameData() {
         if (!pendingDataPack) { closeDataSyncDialog(); return; }
         const pack = pendingDataPack;
         const remoteVer = String(pack.data_version || '');
-        const added = mergeGameData(pack);
+        const modal = document.getElementById('dataSyncModal');
+        const selected = modal
+            ? Array.from(modal.querySelectorAll('input[data-spirit]:checked'))
+                .map(cb => cb.getAttribute('data-spirit'))
+            : null;                     // 无弹窗时视为全选
+        const added = mergeGameData(pack, selected, isPublisherMode());
         if (remoteVer) localStorage.setItem(DATA_VERSION_KEY, remoteVer);
         pendingDataPack = null;
         persistAll();
@@ -4630,16 +4689,22 @@ id="externalLink">🔗 打开查询工具</a>
         closeDataSyncDialog();
         const st = document.getElementById('dataSyncStatus');
         if (st) {
-            st.textContent = '已更新：新增 ' + added.seasons + ' 个赛季、' + added.spirits
-                + ' 个异色精灵（原有数据未改动）';
+            st.textContent = (added.seasons || added.spirits)
+                ? '已更新：新增 ' + added.seasons + ' 个赛季、' + added.spirits
+                  + ' 个异色精灵（原有数据未改动）'
+                : '未添加任何内容（已标记本批数据为已读，下次检查不会再提示）';
         }
     }
 
-    // 合并规则：只加「新赛季」与其内的精灵，其它一律不动
+    // 合并规则：只增不删、绝不覆盖已有条目
     // - 赛季：本地没有 → 新增；已存在 → 完全不碰（不补日期、不改顺序，发布者与用户的老赛季数据可能不同）
-    // - 精灵：只处理「本次新加进来的赛季」里的精灵，且同名已存在则跳过（不覆盖、不重复）
-    function mergeGameData(pack) {
+    // - 精灵：
+    //    普通模式（allowRestore=false）：只处理「本次新加进来的赛季」里的精灵
+    //    发布者模式（allowRestore=true）：老赛季（含未写赛季）里本地缺失的精灵也可补回
+    //  - selectedNames：弹窗勾选的精灵名单；不在名单里的（被用户取消勾选）一律不添加
+    function mergeGameData(pack, selectedNames, allowRestore) {
         const added = { spirits: 0, seasons: 0, filled: 0 };
+        const selected = selectedNames ? new Set(selectedNames) : null;
         const seasonByName = {};
         seasons.forEach(s => { if (s && s.name) seasonByName[String(s.name).trim()] = s; });
 
@@ -4659,22 +4724,25 @@ id="externalLink">🔗 打开查询工具</a>
             added.seasons++;
         });
 
-        if (!added.seasons) return added;       // 没有新赛季就什么都不加
-
         const presetByName = {};
         presetSpirits.forEach(p => { if (p && p.name) presetByName[String(p.name).trim()] = p; });
 
         (pack.spirits || []).forEach(rp => {
             const name = String((rp && rp.name) || '').trim();
             if (!name) return;
+            if (selected && !selected.has(name)) return;    // 用户取消勾选，不添加
             const sName = rp.season ? String(rp.season).trim() : '';
-            if (!newSeasonNames[sName]) return;     // 老赛季 / 未写赛季的精灵不导入
+            const seasonObj = sName ? seasonByName[sName] : null;
+            const eligible = allowRestore
+                ? (!sName || !!seasonObj)                   // 补回：赛季存在（老/新）或未写赛季即可
+                : !!newSeasonNames[sName];                  // 普通：仅限本次新加的赛季
+            if (!eligible) return;
             if (presetByName[name]) return;         // 本地已有同名精灵，保持原样
             const np = {
                 id: nextPresetId++, name: name,
                 attrs: Array.isArray(rp.attrs) ? rp.attrs.slice() : [],
                 type: rp.type || 'normal',
-                defaultSeasonId: seasonByName[sName].id,
+                defaultSeasonId: seasonObj ? seasonObj.id : null,
                 updatedAt: new Date(0).toISOString()
             };
             presetSpirits.push(np);
