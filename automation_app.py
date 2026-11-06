@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -4253,6 +4253,8 @@ id="externalLink">🔗 打开查询工具</a>
     const PUBLISHER_KEY = 'publisher_mode';
     const PUBLISH_TOKEN_KEY = 'gh_publish_token';
     let pendingPublishPack = null;
+    let lastPendingPublishPack = null;   // 等待远端对比结果、即将弹确认窗的数据包
+    let lastPendingNoSeason = 0;
 
     function isPublisherMode() { return localStorage.getItem(PUBLISHER_KEY) === '1'; }
 
@@ -4286,7 +4288,8 @@ id="externalLink">🔗 打开查询工具</a>
         });
     }
 
-    // 上传前先做本地检查，再弹窗确认——避免把「没有赛季」的空包推上去
+    // 上传前先做本地检查，再拉远端做覆盖对比，最后弹窗确认——上传是整文件覆盖，
+    // 不是追加：远端有、本地没有的内容会被删掉，所以要先让发布者看清楚再确认
     function publishDataPack() {
         if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
         const tokenEl = document.getElementById('publishToken');
@@ -4306,20 +4309,60 @@ id="externalLink">🔗 打开查询工具</a>
             return;
         }
         const noSeason = pack.spirits.filter(p => !p.season).length;
-        showPublishConfirm(pack, noSeason);
+        // 拉取远端当前数据包，给确认弹窗做「覆盖对比」展示（拉不到也允许继续，只做提示）
+        lastPendingPublishPack = pack;
+        lastPendingNoSeason = noSeason;
+        const repo = ((document.getElementById('updateGithubRepo') || {}).value || '').trim()
+                     || 'H-ZHOWEI/iseki-arrest';
+        if (st) st.textContent = '正在获取远端当前数据包做对比…';
+        try {
+            pythonAPI.previewRemotePack(repo, 'data/game_data.json', 'main');
+        } catch (e) {
+            showPublishConfirm(pack, noSeason, null);
+        }
     }
 
-    function showPublishConfirm(pack, noSeason) {
+    function showPublishConfirm(pack, noSeason, remotePack) {
         const old = document.getElementById('publishConfirmModal');
         if (old) old.remove();
+        // 算出「远端有、本地没有」的内容：上传是覆盖，这些会从远端消失
+        let remoteInfo = '', removeInfo = '';
+        if (remotePack && Array.isArray(remotePack.seasons) && Array.isArray(remotePack.spirits)) {
+            const localSeasons = new Set(pack.seasons.map(s => s.name));
+            const localSpirits = new Set(pack.spirits.map(p => p.name));
+            const goneSeasons = remotePack.seasons.filter(s => !localSeasons.has(s.name)).map(s => s.name);
+            const goneSpirits = remotePack.spirits.filter(p => !localSpirits.has(p.name)).map(p => p.name);
+            remoteInfo = '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5; margin:6px 0 0;">'
+                + '远端当前：<b>' + remotePack.seasons.length + '</b> 个赛季、<b>'
+                + remotePack.spirits.length + '</b> 只精灵。</p>';
+            if (goneSpirits.length || goneSeasons.length) {
+                const names = goneSpirits.slice(0, 8).map(n => '「' + n + '」').join('')
+                    + (goneSpirits.length > 8 ? ' 等 ' + goneSpirits.length + ' 只' : '');
+                const sn = goneSeasons.slice(0, 4).map(n => '「' + n + '」').join('')
+                    + (goneSeasons.length > 4 ? ' 等 ' + goneSeasons.length + ' 个' : '');
+                removeInfo = '<p style="font-size:0.75rem; color:#a8322f; background:#fdf0ee;'
+                    + ' border:1px solid #f0d2c4; border-radius:10px; padding:8px 10px; line-height:1.5;">'
+                    + '警告：以下内容<b>远端有、本地没有</b>，上传后将从远端删除：<br>'
+                    + (goneSpirits.length ? '精灵：' + names + '<br>' : '')
+                    + (goneSeasons.length ? '赛季：' + sn : '')
+                    + '</p>';
+            } else {
+                removeInfo = '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
+                    + '本地已包含远端全部内容，覆盖后不会丢失任何精灵。</p>';
+            }
+        } else {
+            remoteInfo = '<p style="font-size:0.75rem; color:#a8622f; line-height:1.5;">'
+                + '未能获取远端当前数据（网络原因），本次将直接覆盖，请先确认本地数据完整。</p>';
+        }
         const modal = document.createElement('div');
         modal.className = 'modal';
         modal.id = 'publishConfirmModal';
-        modal.innerHTML = '<div class="modal-content" style="max-width:460px;">'
+        modal.innerHTML = '<div class="modal-content" style="max-width:480px;">'
             + '<h3 style="margin-top:0;">上传数据包到 GitHub</h3>'
             + '<p style="font-size:0.78rem; color:#5a7a4a; line-height:1.6;">'
             + '本次数据包：<b>' + pack.seasons.length + '</b> 个赛季、<b>' + pack.spirits.length + '</b> 只精灵。<br>'
-            + '将提交到仓库 <b>data/game_data.json</b>（分支 main）。</p>'
+            + '上传方式：<b>覆盖</b> —— 远端 <b>data/game_data.json</b>（分支 main）会被本地数据完整替换，不是追加。</p>'
+            + remoteInfo + removeInfo
             + (noSeason
                 ? '<p style="font-size:0.75rem; color:#a8622f; background:#fdf4ea; border:1px solid #f0dcc4;'
                   + ' border-radius:10px; padding:8px 10px; line-height:1.5;">'
@@ -4327,9 +4370,9 @@ id="externalLink">🔗 打开查询工具</a>
                   + '这些精灵<b>不会推送给用户</b>。</p>'
                 : '')
             + '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
-            + '用户端只会收到<b>新赛季</b>及其中的精灵；老赛季的改动不会推送。</p>'
+            + '用户端只会收到<b>新赛季</b>及其中的精灵；老赛季的改动不会推送给普通用户。</p>'
             + '<div style="display:flex; gap:8px; margin-top:14px;">'
-            + '<button id="confirmPublishBtn" class="primary">确认上传</button>'
+            + '<button id="confirmPublishBtn" class="primary">确认覆盖上传</button>'
             + '<button id="cancelPublishBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
             + ' color:#2b6e2f; border-radius:14px; padding:8px 16px; cursor:pointer; font-weight:600;">取消</button>'
             + '</div></div>';
@@ -4339,6 +4382,14 @@ id="externalLink">🔗 打开查询工具</a>
             modal.remove();
             doPublish(pack);
         };
+    }
+
+    // 拉远端数据包的回调：拿到就带对比展示，拿不到也允许继续（弹窗里只做提示）
+    function onRemotePackPreview(res) {
+        const st = document.getElementById('publishStatus');
+        if (st) st.textContent = '';
+        showPublishConfirm(lastPendingPublishPack, lastPendingNoSeason,
+            (res && res.status === 'ok' && res.pack) ? res.pack : null);
     }
 
     function doPublish(pack) {
@@ -5488,6 +5539,29 @@ class PythonAPI(QObject):
                         "onUpdateError(%s)" % json.dumps({"message": str(e)}, ensure_ascii=False))
                 except Exception:
                     pass
+        threading.Thread(target=_run, daemon=True).start()
+
+    @pyqtSlot(str, str, str)
+    def previewRemotePack(self, repo, path, branch):
+        """上传前拉取远端当前的数据包（主地址失败自动走镜像），供前端做「覆盖对比」展示。
+        拉取失败也回包（status=error），前端降级为「直接覆盖 + 提示确认」。"""
+        def _emit(obj):
+            try:
+                self.sigRunJs.emit("onRemotePackPreview(%s)" % json.dumps(obj, ensure_ascii=False))
+            except Exception:
+                pass
+
+        def _run():
+            raw = "https://raw.githubusercontent.com/%s/%s/%s" % (
+                (repo or '').strip().strip('/'), (branch or 'main').strip() or 'main',
+                (path or 'data/game_data.json').strip().lstrip('/'))
+            try:
+                pack, _hit = http_get_json_multi(raw, timeout=8)
+                if not isinstance(pack, dict):
+                    raise ValueError("远端数据包格式异常")
+                _emit({"status": "ok", "pack": pack})
+            except Exception as e:
+                _emit({"status": "error", "message": str(e)})
         threading.Thread(target=_run, daemon=True).start()
 
     @pyqtSlot(str, str, str, str, str)
