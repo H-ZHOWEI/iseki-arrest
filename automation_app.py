@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -4514,19 +4514,66 @@ id="externalLink">🔗 打开查询工具</a>
     //   拿老赛季做比对会把差异当成「新增」塞给用户，所以直接不看。
     // 发布者模式（isPublisherMode）：与数据包全量比对，老赛季里本地缺失的精灵
     //   也列为「补回」（restore: true），方便发布者误删后从数据包恢复。
+    // 按赛季起止日期判断「当前赛季」：今天落在哪个区间就是哪个；
+    // 没有区间覆盖今天时，取「已开始」里开始日期最晚的；都没有日期则按 order 最大的算。
+    function getCurrentSeasonInfo() {
+        if (!seasons || !seasons.length) return { name: '', season: null };
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        function parseDate(s) {
+            if (!s) return null;
+            const d = new Date(String(s).trim().replace(/-/g, '/'));
+            return isNaN(d.getTime()) ? null : d;
+        }
+        let active = null;
+        seasons.forEach(function (s) {
+            if (!s || !s.name) return;
+            const st = parseDate(s.startDate), ed = parseDate(s.endDate);
+            if (st && ed && today >= st && today <= ed) active = s;
+        });
+        if (active) return { name: String(active.name).trim(), season: active };
+        let best = null, bestT = -Infinity;
+        seasons.forEach(function (s) {
+            if (!s || !s.name) return;
+            const st = parseDate(s.startDate);
+            if (st && st <= today && st.getTime() >= bestT) { bestT = st.getTime(); best = s; }
+        });
+        if (best) return { name: String(best.name).trim(), season: best };
+        let last = null;
+        seasons.forEach(function (s) { if (s && s.name && (!last || (s.order || 0) >= (last.order || 0))) last = s; });
+        return last ? { name: String(last.name).trim(), season: last } : { name: '', season: null };
+    }
+
+    function getCurrentSeasonName() { return getCurrentSeasonInfo().name; }
+
+    // 赛季是否已经结束（有合法结束日期且早于今天）——已结束的赛季不参与推送
+    function isSeasonEnded(endDate) {
+        if (!endDate) return false;
+        const d = new Date(String(endDate).trim().replace(/-/g, '/'));
+        if (isNaN(d.getTime())) return false;
+        d.setHours(23, 59, 59, 999);
+        return d.getTime() < Date.now();
+    }
+
     function diffGameData(pack) {
         const pub = isPublisherMode();
+        const curSeasonName = getCurrentSeasonName();   // 当前赛季（按赛季起止日期判断）
         const knownSeasons = {};
         const knownSpirits = {};
         seasons.forEach(s => { if (s && s.name) knownSeasons[String(s.name).trim()] = true; });
         presetSpirits.forEach(p => { if (p && p.name) knownSpirits[String(p.name).trim()] = true; });
 
-        const res = { seasons: [], spirits: [], skipped: 0 };
+        const res = { seasons: [], spirits: [], skipped: 0, pastSeasons: 0, pastSeasonNames: [] };
 
         const newSeasonNames = {};
         (pack.seasons || []).forEach(rs => {
             const name = String((rs && rs.name) || '').trim();
             if (!name || knownSeasons[name]) return;
+            // 已结束的赛季不再当作「新赛季」：过往赛季的精灵不推给用户
+            if (isSeasonEnded(rs.endDate)) {
+                res.pastSeasons++;
+                res.pastSeasonNames.push(name);
+                return;
+            }
             knownSeasons[name] = true;      // 远端包内同名只算一次
             newSeasonNames[name] = true;
             res.seasons.push({
@@ -4549,8 +4596,10 @@ id="externalLink">🔗 打开查询工具</a>
                 return;
             }
             if (pub) {
-                // 发布者模式：老赛季（含未写赛季）里本地缺失的精灵 → 可补回
+                // 发布者模式：只允许补回「当前赛季」里本地缺失的精灵；
+                // 过往赛季一律不比、不导入（早前全量比对会把 S3/S4 的老精灵一起列出来，属于误推）
                 if (knownSpirits[name]) return;
+                if (!curSeasonName || sName !== curSeasonName) { res.skipped++; return; }
                 knownSpirits[name] = true;
                 res.spirits.push({ name: name, season: sName, type: rp.type || 'normal', restore: true });
                 return;
@@ -4593,7 +4642,7 @@ id="externalLink">🔗 打开查询工具</a>
             if (st) {
                 st.textContent = ((remoteVer && remoteVer !== localVer)
                     ? (isPublisherMode()
-                        ? '数据已是最新（本地与数据包内容一致，无缺失项）'
+                        ? '数据已是最新（当前赛季无缺失项，过往赛季不参与比对）'
                         : '数据已是最新（没有新赛季）')
                     : '数据已是最新')
                     + (fromFile ? '（来自本地文件）'
@@ -4661,13 +4710,23 @@ id="externalLink">🔗 打开查询工具</a>
               + '</div>'
             : '';
 
+        const curInfo = getCurrentSeasonInfo();
+        const curSeasonLine = curInfo.name
+            ? ('当前赛季：<b>' + escapeHtml(curInfo.name) + '</b>'
+               + ((curInfo.season && (curInfo.season.startDate || curInfo.season.endDate))
+                    ? '（' + escapeHtml(curInfo.season.startDate || '?') + ' ~ '
+                      + escapeHtml(curInfo.season.endDate || '?') + '）'
+                    : '')
+               + '<br>')
+            : '';
         modal.innerHTML = '<div class="modal-content" style="max-width:480px;">'
             + '<h3 style="margin-top:0;">发现新赛季数据</h3>'
             + '<p style="font-size:0.76rem; color:#5a7a4a; line-height:1.5;">'
             + (verShow ? '数据版本：' + escapeHtml(verShow) + '<br>' : '')
+            + curSeasonLine
             + (hasRestore
-                ? '当前处于<b>发布者模式</b>：与数据包全量比对——除新赛季外，还会列出数据包里有、'
-                  + '而你本地缺失的精灵（含老赛季，带「补回」标记），勾选后即可补回误删的精灵。'
+                ? '当前处于<b>发布者模式</b>：除新赛季外，还会补回<b>当前赛季</b>里你本地缺失的精灵'
+                  + '（带「补回」标记）；<b>过往赛季一律不比对、不导入</b>。'
                 : '只会把下面这些<b>新赛季</b>和它们里面的异色精灵加进来；'
                   + '<b>已有赛季不参与比对</b>，你原有的赛季、精灵和抓取记录不会被改动。')
             + '</p>'
@@ -4675,7 +4734,14 @@ id="externalLink">🔗 打开查询工具</a>
             + seasonHtml + spiritHtml + '</div>'
             + (diff.skipped
                 ? '<div style="margin-top:8px; font-size:0.7rem; color:#8a9a80; line-height:1.4;">'
-                  + '另有 ' + diff.skipped + ' 个精灵属于已有赛季，本次<b>不比对、不导入</b>。</div>'
+                  + '另有 ' + diff.skipped + ' 个精灵属于已有赛季或已结束赛季，本次<b>不比对、不导入</b>。</div>'
+                : '')
+            + (diff.pastSeasons
+                ? '<div style="margin-top:6px; font-size:0.7rem; color:#8a9a80; line-height:1.4;">'
+                  + '数据包里另有 ' + diff.pastSeasons + ' 个赛季<b>已结束</b>（'
+                  + escapeHtml(diff.pastSeasonNames.slice(0, 4).join('、'))
+                  + (diff.pastSeasonNames.length > 4 ? ' 等' : '')
+                  + '），过往赛季不推送。</div>'
                 : '')
             + '<div style="display:flex; gap:8px; margin-top:14px;">'
             + '<button id="applyDataBtn" class="primary">更新到本地</button>'
@@ -4751,7 +4817,7 @@ id="externalLink">🔗 打开查询工具</a>
     // - 赛季：本地没有 → 新增；已存在 → 完全不碰（不补日期、不改顺序，发布者与用户的老赛季数据可能不同）
     // - 精灵：
     //    普通模式（allowRestore=false）：只处理「本次新加进来的赛季」里的精灵
-    //    发布者模式（allowRestore=true）：老赛季（含未写赛季）里本地缺失的精灵也可补回
+    //    发布者模式（allowRestore=true）：额外可补回「当前赛季」里本地缺失的精灵；过往赛季一律不碰
     //  - selectedNames：弹窗勾选的精灵名单；不在名单里的（被用户取消勾选）一律不添加
     function mergeGameData(pack, selectedNames, allowRestore) {
         const added = { spirits: 0, seasons: 0, filled: 0 };
@@ -4763,6 +4829,7 @@ id="externalLink">🔗 打开查询工具</a>
         (pack.seasons || []).forEach(rs => {
             const name = String((rs && rs.name) || '').trim();
             if (!name || seasonByName[name]) return;
+            if (isSeasonEnded(rs.endDate)) return;   // 已结束的赛季不导入（与 diff 保持一致）
             const ns = {
                 id: nextSeasonId++, name: name,
                 order: (rs.order === undefined || rs.order === null) ? 0 : rs.order,
@@ -4777,6 +4844,7 @@ id="externalLink">🔗 打开查询工具</a>
 
         const presetByName = {};
         presetSpirits.forEach(p => { if (p && p.name) presetByName[String(p.name).trim()] = p; });
+        const curSeasonName = getCurrentSeasonName();   // 发布者补回只允许当前赛季
 
         (pack.spirits || []).forEach(rp => {
             const name = String((rp && rp.name) || '').trim();
@@ -4785,7 +4853,7 @@ id="externalLink">🔗 打开查询工具</a>
             const sName = rp.season ? String(rp.season).trim() : '';
             const seasonObj = sName ? seasonByName[sName] : null;
             const eligible = allowRestore
-                ? (!sName || !!seasonObj)                   // 补回：赛季存在（老/新）或未写赛季即可
+                ? (!!newSeasonNames[sName] || (!!sName && sName === curSeasonName))  // 补回：新赛季 or 当前赛季
                 : !!newSeasonNames[sName];                  // 普通：仅限本次新加的赛季
             if (!eligible) return;
             if (presetByName[name]) return;         // 本地已有同名精灵，保持原样
