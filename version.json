@@ -1,9 +1,9 @@
 {
-  "version": "1.3.11",
+  "version": "1.3.12",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.3.11：修复老版本「明明有新版却提示已是最新版本」。原因是旧版会优先查 GitHub Releases（本仓库没有 Release）或读到 CDN 缓存的旧清单。现在检查更新以 version.json 直链为准，主地址与所有镜像并发请求且全部避开缓存，按版本号取最新；无 Release 时自动回退清单。状态栏显示线上版本与检查来源，新增「恢复默认更新地址」按钮；读到旧版本时给出橙色提示。仍停留在 1.3.6 的电脑建议直接下载 exe 覆盖安装一次。详见 CHANGELOG.md。",
+  "notes": "v1.3.12：彻底修复「点立即更新、进度走完、软件关了，重新打开还是旧版本」。根因是 1.3.10/1.3.11 用 DETACHED_PROCESS 启动外部 PowerShell 更新脚本，powershell.exe 在没有控制台时直接退出、替换逻辑一次都没执行。现改为程序内直接把旧 exe 改名 .bak 并写入新文件（Windows 允许重命名运行中的 exe），不再依赖外部脚本；替换成功后自动重新打开，失败则绝不关闭软件，并把已校验的新版放到软件目录隔壁「异色逮捕计划_新版.exe」供手动双击。同时把 jsDelivr 从清单/数据包/exe 下载线路中全部移除——它把 @main 锁在约 12 小时前的 commit，会让老客户端误报「已是最新版本」。注意：仍停留在 1.3.11 及更早的电脑，旧版自带更新器修不好自己，请直接下载 dist/异色逮捕计划.exe 覆盖一次（不会丢本机数据）。详见 CHANGELOG.md 与 操作指引.md。",
   "mandatory": false,
-  "sha256": "7c4a53ce0f81df498f2b88bfd09e552d488ba99e2c7bdaea330498bdbc5c7e07",
+  "sha256": "05f1d6c43a75d754c5d9e69e8756fe7cabb6382680ebbee6599d21c55f2bc6e6",
   "pub_date": "2026-11-07",
-  "size": 87287428
+  "size": 87288297
 }

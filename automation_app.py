@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.11"
+APP_VERSION = "1.3.12"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -1048,7 +1048,7 @@ id="externalLink">🔗 打开查询工具</a>
             <div style="border-top:1px dashed #cfe0bf; margin-top:14px; padding-top:12px;">
                 <label style="font-weight:600;" id="gameDataLabel">📦 游戏数据（预设精灵库 / 赛季）</label>
                 <div style="margin-top:8px;">
-                    <label>数据包直链（留空用默认；国内网络拉不动时可换成镜像，如 cdn.jsdelivr.net/gh/H-ZHOWEI/iseki-arrest@main/data/game_data.json）</label>
+                    <label>数据包直链（留空用默认；国内网络拉不动时可在地址前加 https://ghproxy.net/ 走加速，不要用 jsDelivr——它会缓存旧内容）</label>
                     <input type="text" id="updateDataUrl" class="search-box" style="width:100%;" placeholder="https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json">
                 </div>
                 <div style="display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap;">
@@ -1077,7 +1077,7 @@ id="externalLink">🔗 打开查询工具</a>
                 <div class="badge" style="margin-top:8px;">
                     💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
                     点「检查更新」时<b>先查软件版本，再查有没有新赛季</b>；也可单独点「检查数据更新」。<br>
-                    主地址（GitHub raw）拉不动时会<b>自动换 github.com 直链 / jsDelivr / ghproxy 等镜像</b>重试，也可点「测试地址」逐条探测。<br>
+                    主地址（GitHub raw）拉不动时会<b>自动换 github.com 直链 / ghproxy 系列镜像</b>重试，也可点「测试地址」逐条探测；<b>V1.3.12 起已移除 jsDelivr</b>（它会把清单缓存成 12 小时前的旧内容，导致漏报新版本）。<br>
                     发现新赛季时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只加新赛季及其中的精灵</b>——<b>已有赛季不参与比对</b>，你原有的赛季、精灵（包括你改过的和手动新增的）一律不动、不删。<br>
                     发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新赛季提示。<br>
                     <span style="color:#8a9a80;">提示：用户只会收到「新赛季」及其精灵，所以给老赛季补精灵不会推送给别人。</span>
@@ -5060,8 +5060,8 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     function onUpdateDone() {
-        onUpdateProgress(100, '安装中');
-        setUpdateHint('校验通过，软件即将自动关闭并替换为新版本，稍后会自动重新打开。', '#2b6e2f');
+        onUpdateProgress(100, '已安装');
+        setUpdateHint('新版本已安装，软件即将关闭并自动重新打开；如果没有自动打开，请手动运行程序（本机数据不会丢）。', '#2b6e2f');
     }
 
     function onUpdateError(obj) {
@@ -5134,8 +5134,10 @@ def compare_versions(a, b):
 
 def _mirror_urls(url):
     """给 GitHub raw 直链生成备用镜像候选（国内 raw 经常 502 / 读超时 / 被重置）。
-    顺序按实测可用性排列：github.com/raw（同源 302）→ jsDelivr fastly/cdn → ghproxy 类加速。
-    注意 raw.gitmirror.com 已废弃（DNS 无法解析），不再作为候选。非 raw 链接返回空列表。"""
+    1.3.12 起移除 jsDelivr：它把 `@main` 分支解析锁到抓包时的 commit，缓存 12 小时，
+    加 `?_t` / purge.jsdelivr.net 都刷不掉；发版后这段时间内会一直返回上一版
+    version.json / 数据包，老客户端因此误报「已是最新版本」。
+    现在只保留实时回源的线路。非 raw 链接返回空列表。"""
     m = re.match(r'https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)', url or '')
     if not m:
         return []
@@ -5143,8 +5145,6 @@ def _mirror_urls(url):
     raw = "https://raw.githubusercontent.com/%s/%s/%s/%s" % (owner, repo, branch, path)
     return [
         "https://github.com/%s/%s/raw/%s/%s" % (owner, repo, branch, path),
-        "https://fastly.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path),
-        "https://cdn.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path),
         "https://ghproxy.net/%s" % raw,
         "https://gh-proxy.com/%s" % raw,
         "https://mirror.ghproxy.com/%s" % raw,
@@ -5380,8 +5380,8 @@ def _raise_github_error(e):
 
 
 def _update_candidate_urls(url):
-    """给 exe 直链生成备用线路：主地址 → 带时间戳绕坏缓存 → 两个 ghproxy → github.com/raw → jsDelivr。
-    注意：jsDelivr 对 GitHub 上超过 20MB 的文件会 403，只作最后兜底。"""
+    """给 exe 直链生成备用线路：主地址 → 带时间戳绕坏缓存 → 两个 ghproxy → github.com/raw。
+    1.3.12 起移除 jsDelivr：它对 >20MB 文件会 403，且 @main 快照会滞后 12 小时。"""
     u = (url or "").strip()
     if not u:
         return []
@@ -5395,7 +5395,6 @@ def _update_candidate_urls(url):
         out.append("https://gh-proxy.com/" + clean)
         owner, repo, branch, path = m.groups()
         out.append("https://github.com/%s/%s/raw/%s/%s" % (owner, repo, branch, path))
-        out.append("https://fastly.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path))
     seen, res = set(), []
     for x in out:
         if x not in seen:
@@ -5668,97 +5667,52 @@ def fetch_github_release(repo):
     return {"version": version, "download_url": download_url, "notes": notes, "size": size}
 
 
-def build_updater_script(old_path, new_path, child_pid, parent_pid, log_path):
-    """生成 PowerShell 更新脚本（UTF-8 BOM）。
-    关键：onefile 打包的程序有「bootloader 父进程 + Python 子进程」两个进程，
-    os._exit(0) 只结束子进程；必须等父进程也退出、exe 文件句柄释放后才能覆盖，
-    否则 Copy-Item 会「文件正在使用」而静默失败——这正是「软件关了却还是旧版本」的原因。"""
-    ps = r'''
-param($oldPath, $newPath, $pidA, $pidB, $logPath)
-$ErrorActionPreference = "Continue"
-function Log($m) {
-  try { Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) -Encoding UTF8 } catch {}
-}
-try {
-  Log "开始替换 old=$oldPath new=$newPath pidA=$pidA pidB=$pidB"
-  $deadline = (Get-Date).AddSeconds(120)
-  foreach ($p in @($pidA, $pidB)) {
-    if ($p -and ([int]$p -gt 0) -and ([int]$p -ne $PID)) {
-      while ((Get-Date) -lt $deadline) {
-        $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue
-        if (-not $proc) { break }
-        Start-Sleep -Milliseconds 250
-      }
-    }
-  }
-  Start-Sleep -Seconds 1
-  $backup = $oldPath + ".bak"
-  $ok = $false
-  for ($i = 1; $i -le 20; $i++) {
-    try {
-      if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
-      # 先把正在运行的旧 exe 改名（Windows 允许重命名运行中的 exe），再复制新文件到原名
-      Move-Item -LiteralPath $oldPath -Destination $backup -Force -ErrorAction Stop
-      Copy-Item -LiteralPath $newPath -Destination $oldPath -Force -ErrorAction Stop
-      $len = (Get-Item -LiteralPath $oldPath).Length
-      $fs = [System.IO.File]::OpenRead($oldPath)
-      $head = New-Object byte[] 2
-      [void]$fs.Read($head, 0, 2)
-      $fs.Close()
-      if ($head[0] -ne 77 -or $head[1] -ne 90) { throw "复制后的文件不是有效 exe" }
-      $ok = $true
-      Log "替换成功，新文件大小=$len"
-      break
-    } catch {
-      Log ("第 $i 次尝试失败：" + $_.Exception.Message)
-      if (-not (Test-Path -LiteralPath $oldPath) -and (Test-Path -LiteralPath $backup)) {
-        Move-Item -LiteralPath $backup -Destination $oldPath -Force -ErrorAction SilentlyContinue
-      }
-      Start-Sleep -Seconds 1
-    }
-  }
-  if (-not $ok) { throw "无法替换程序文件（程序可能仍在运行，或目录没有写入权限）" }
-  Remove-Item -LiteralPath $newPath -Force -ErrorAction SilentlyContinue
-  Start-Process -FilePath $oldPath
-  Log "完成，已启动新版本"
-} catch {
-  Log ("致命错误：" + $_.Exception.Message)
-  try {
-    Add-Type -AssemblyName System.Windows.Forms
-    [void][System.Windows.Forms.MessageBox]::Show(
-      "自动更新没能完成：`n" + $_.Exception.Message + "`n`n请手动把新版本 exe 复制到软件目录覆盖原文件。`n`n日志：" + $logPath,
-      "异色逮捕 - 更新未完成")
-  } catch {}
-}
-'''
-    fd, path = tempfile.mkstemp(suffix='.ps1', prefix='iseki_update_')
-    with os.fdopen(fd, 'wb') as f:
-        f.write(b'\xef\xbb\xbf')
-        f.write(ps.encode('utf-8'))
-    return path
-
-
 def apply_self_update(old_path, new_path):
-    """启动独立更新脚本后退出，由脚本完成替换与重启。"""
-    child_pid = os.getpid()
+    """在当前进程内把新 exe 换到原路径，返回新版本路径；失败抛 RuntimeError。
+
+    1.3.10 / 1.3.11 用「启动独立 PowerShell 脚本、等进程退出后替换」，但
+    DETACHED_PROCESS 会让 powershell.exe 在没有控制台时直接退出、脚本一行都不执行
+    （实测：换成默认 creationflags 才正常写日志），于是「进度走完、软件关了、重开还是旧版」。
+    Windows 允许重命名正在运行的 exe：改名后原路径空出来，直接写入新文件即可，
+    不需要外部进程、不需要等父子 PID，也不受杀软拦截 .ps1 / Job Object 影响。
+    """
+    import shutil
+    old_path = os.path.abspath(old_path)
+    backup = old_path + '.bak'
+    if os.path.exists(backup):
+        try:
+            os.remove(backup)          # 上次更新留下的备份，可能仍被占用
+        except OSError:
+            backup = old_path + '.%d.bak' % int(time.time())
     try:
-        parent_pid = os.getppid()
-    except Exception:
-        parent_pid = 0
-    log_path = os.path.join(tempfile.gettempdir(), 'iseki_update.log')
-    ps_path = build_updater_script(old_path, new_path, child_pid, parent_pid, log_path)
-    flags = 0
-    if os.name == 'nt':
-        flags = (getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
-                 | getattr(subprocess, 'DETACHED_PROCESS', 0))
-    subprocess.Popen(
-        ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps_path,
-         old_path, new_path, str(child_pid), str(parent_pid), log_path],
-        creationflags=flags, close_fds=True,
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # 给脚本一点启动时间，随后立即退出以释放 exe 句柄
-    time.sleep(0.6)
-    os._exit(0)
+        os.rename(old_path, backup)
+    except Exception as ex:
+        raise RuntimeError("无法重命名旧程序（%s）。可能是目录没有写入权限，"
+                           "或程序被安全软件锁定；请把软件移到普通文件夹后重试。" % _err_text(ex))
+    try:
+        shutil.copyfile(new_path, old_path)
+        with open(old_path, 'rb') as f:
+            if f.read(2) != b'MZ':
+                raise RuntimeError("替换后的文件不是有效 exe")
+        if os.path.getsize(old_path) != os.path.getsize(new_path):
+            raise RuntimeError("替换后的文件大小与安装包不符")
+    except Exception as ex:
+        # 尽力还原，绝不在原路径留下损坏的程序
+        try:
+            if os.path.exists(old_path):
+                os.remove(old_path)
+            os.rename(backup, old_path)
+        except Exception:
+            pass
+        raise RuntimeError("无法替换程序文件（%s）。新版本已下载完成，"
+                           "可以手动复制到软件目录覆盖原文件。" % _err_text(ex))
+    try:
+        os.remove(new_path)
+    except OSError:
+        pass
+    return old_path
+
+
 
 
 # ----------------------------- Python 后端（数据桥接与文件对话框）--------------------------------
@@ -5954,7 +5908,8 @@ class PythonAPI(QObject):
     def syncGameData(self, url):
         """拉取游戏数据包（预设精灵库 + 赛季）并回传给前端做差异检测。
         数据包更新不需要重新打包 exe，用户点「检查更新」即可拿到新赛季数据。
-        主地址（GitHub raw）读超时时自动换 jsDelivr / gitmirror 镜像，避免国内网络下整条同步失败。"""
+        主地址（GitHub raw）读超时时自动换 github.com 直链 / ghproxy 系列镜像，
+        避免国内网络下整条同步失败；V1.3.12 起不再使用会缓存旧内容的 jsDelivr。"""
         def _run():
             try:
                 target = (url or "").strip()
@@ -6069,6 +6024,7 @@ class PythonAPI(QObject):
         def _run():
             new_path = None
             failed = False
+            verified = False
             try:
                 if not getattr(sys, 'frozen', False):
                     raise RuntimeError("当前为开发模式（未打包成 exe），无法执行自更新，请打包后再更新。")
@@ -6117,12 +6073,33 @@ class PythonAPI(QObject):
                     if actual.lower() != expected_sha.lower():
                         raise ValueError("SHA256 校验不通过，文件可能下载不完整或被篡改，请点「重试更新」")
 
+                verified = True
                 emit_progress(100, "校验通过，正在安装")
+                # 进程内直接替换：失败会抛异常，此时绝不退出程序
+                apply_self_update(old_path, new_path)
                 self.sigRunJs.emit("onUpdateDone()")
-                apply_self_update(old_path, new_path)   # 内部 os._exit(0)，不会回来
+                # 尝试拉起新实例；即使失败，文件已经换好，用户手动打开即可
+                try:
+                    subprocess.Popen([old_path], close_fds=True)
+                except Exception:
+                    pass
+                time.sleep(0.8)
+                os._exit(0)
             except Exception as e:
                 failed = True
                 msg = _friendly_download_error(e)
+                # 只有「下载并通过全部校验、但替换失败」才把新 exe 放到软件目录旁边，
+                # 用户直接双击即可用上新版，不至于白下一遍 87MB
+                if verified and new_path and os.path.exists(new_path):
+                    try:
+                        import shutil as _shutil
+                        side = os.path.join(os.path.dirname(os.path.abspath(sys.executable)),
+                                            '异色逮捕计划_新版.exe')
+                        _shutil.copyfile(new_path, side)
+                        msg += "\n\n新版本已放在软件目录：" + side + \
+                               "\n直接双击它就能使用新版（本机数据不会丢）。"
+                    except Exception:
+                        msg += "\n\n新版本安装包：" + new_path
                 try:
                     self.sigRunJs.emit("onUpdateError(%s)" % json.dumps(
                         {"message": msg, "detail": _err_text(e)}, ensure_ascii=False))
