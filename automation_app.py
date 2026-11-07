@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.12"
+APP_VERSION = "1.4.0"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -118,6 +118,70 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             background: #4c9e2c20;
             color: #3d7a24;
         }
+        /* 顶部常驻抬头：版本号 / 检查更新入口 / 更新提示与进度（非模态，不遮挡操作） */
+        .app-topbar {
+            position: sticky;
+            top: 0;
+            z-index: 300;
+            background: rgba(255, 255, 255, 0.97);
+            backdrop-filter: blur(12px);
+            border: 1px solid #d9e3cf;
+            border-top: none;
+            border-radius: 0 0 18px 18px;
+            box-shadow: 0 4px 12px rgba(0, 20, 0, 0.06);
+            margin: -16px -12px 14px;
+            padding: 8px 12px 9px;
+        }
+        .topbar-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .topbar-brand {
+            font-weight: 700;
+            font-size: 0.84rem;
+            color: #2b6e2f;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .topbar-ver { font-size: 0.68rem; color: #7d9870; font-weight: 600; margin-left: 5px; }
+        .topbar-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+        .topbar-status { font-size: 0.68rem; color: #7d9870; margin-top: 3px; line-height: 1.4; }
+        .topbar-panel {
+            margin-top: 7px;
+            border-top: 1px dashed #d9e3cf;
+            padding-top: 8px;
+            font-size: 0.75rem;
+            line-height: 1.55;
+        }
+        .tb-title { font-weight: 700; color: #2b6e2f; font-size: 0.8rem; }
+        .tb-notes {
+            max-height: 86px;
+            overflow: auto;
+            background: #f3f7ee;
+            border-radius: 10px;
+            padding: 6px 8px;
+            margin: 6px 0;
+            white-space: pre-line;
+            color: #4a5f43;
+            font-size: 0.72rem;
+        }
+        .tb-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+        .tb-progress-track {
+            height: 8px;
+            background: #e3eada;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+        .tb-progress-fill {
+            height: 100%; width: 0%;
+            background: linear-gradient(135deg, #2b6e2f, #4c9e2c);
+            transition: width .2s;
+        }
+        #topUpdateDot { display: none; color: #c23d2b; font-size: 0.8rem; }
         .card {
             background: rgba(255, 255, 255, 0.96);
             border-radius: 28px;
@@ -794,6 +858,19 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 </head>
 <body>
 <div class="app-container" id="app">
+    <!-- 顶部常驻抬头：版本号 + 一眼能点到的「检查更新」+ 非阻塞的更新提示/进度 -->
+    <div class="app-topbar" id="appTopBar">
+        <div class="topbar-row">
+            <div class="topbar-brand">🎯 异色逮捕大师<span class="topbar-ver" id="topVersionLabel">V__APP_VERSION__</span></div>
+            <div class="topbar-actions">
+                <span id="topUpdateDot" title="发现新版本">●</span>
+                <button id="topCheckUpdateBtn" class="small">🔄 检查更新</button>
+            </div>
+        </div>
+        <div class="topbar-status" id="topStatusText"></div>
+        <div class="topbar-panel" id="topUpdatePanel" style="display:none;"></div>
+    </div>
+
     <!-- Tab1: 捕捉规划 -->
     <div id="tab1" class="tab-content active-tab">
         <!-- 每日需抓轮数统计 -->
@@ -1076,14 +1153,14 @@ id="externalLink">🔗 打开查询工具</a>
                 </div>
                 <div class="badge" style="margin-top:8px;">
                     💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
-                    点「检查更新」时<b>先查软件版本，再查有没有新赛季</b>；也可单独点「检查数据更新」。<br>
+                    每次打开软件都会<b>在后台自动检查一次</b>版本（顶部抬头会显示结果），发现新版直接在抬头提示，不弹窗挡操作；也可以点顶部或下方的「检查更新」手动查。点「检查更新」时<b>先查软件版本，再查有没有新赛季</b>；也可单独点「检查数据更新」。<br>
                     主地址（GitHub raw）拉不动时会<b>自动换 github.com 直链 / ghproxy 系列镜像</b>重试，也可点「测试地址」逐条探测；<b>V1.3.12 起已移除 jsDelivr</b>（它会把清单缓存成 12 小时前的旧内容，导致漏报新版本）。<br>
                     发现新赛季时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只加新赛季及其中的精灵</b>——<b>已有赛季不参与比对</b>，你原有的赛季、精灵（包括你改过的和手动新增的）一律不动、不删。<br>
                     发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新赛季提示。<br>
                     <span style="color:#8a9a80;">提示：用户只会收到「新赛季」及其精灵，所以给老赛季补精灵不会推送给别人。</span>
                 </div>
             </div>
-            <div class="badge" style="margin-top:8px;">💡 默认通过仓库根目录的 <b>version.json</b> 清单检查更新，其 <b>download_url</b> 指向仓库内 <b>dist/异色逮捕计划.exe</b>（与「喵想奇记」一致：把 exe 直接提交进仓库）。发布新版时，先把新 exe 放进 <b>dist/</b> 并提交，再更新 <b>version.json</b> 的 version 与 sha256 即可；也可改用 Releases（在仓库 Releases 上传同名 exe 附件）。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
+            <div class="badge" style="margin-top:8px;">💡 默认通过仓库根目录的 <b>version.json</b> 清单检查更新，其 <b>download_url</b> 指向仓库内 <b>dist/异色逮捕计划.exe</b>（与「喵想奇记」一致：把 exe 直接提交进仓库）。发布新版时，先把新 exe 放进 <b>dist/</b> 并提交，再更新 <b>version.json</b> 的 version 与 sha256 即可；也可改用 Releases（在仓库 Releases 上传同名 exe 附件）。版本号按语义化比对（如 1.10.0 不会误判小于 1.9.0）。<b>V1.4.0 起「检查更新」也放在了软件顶部抬头</b>，任何页面都能一键点；更新进度同样显示在抬头，不打断使用。当前版本：<span id="currentVersionLabel">__APP_VERSION__</span></div>
         </div>
 
         <!-- 成长计划设置 -->
@@ -3554,8 +3631,9 @@ id="externalLink">🔗 打开查询工具</a>
         new QWebChannel(qt.webChannelTransport, function(channel) {
             pythonAPI = channel.objects.pythonAPI;
             // 注意：这个回调是异步的，init() 跑完时 pythonAPI 可能还是 null。
-            // 数据包检测统一由 maybeAutoCheckUpdate() 在通道就绪后触发（先查版本，再查新增数据），
-            // 这里不再单独发起，避免一次启动重复请求两次数据包。
+            // 启动后台检查统一由 maybeAutoCheckUpdate() 在通道就绪后触发（先查版本，再查新增数据），
+            // 这里调用一次，init() 末尾再兜底一次，内部有 autoCheckStarted 保证只发一轮请求。
+            maybeAutoCheckUpdate();
             document.getElementById("exportWarehouseBtn")?.addEventListener("click", function() {
                 if(pythonAPI) pythonAPI.exportWarehouse(JSON.stringify({ ballTypes, inventory }));
             });
@@ -3612,6 +3690,8 @@ id="externalLink">🔗 打开查询工具</a>
             document.getElementById("pasteImportBtn")?.addEventListener("click", pasteImport);
             document.getElementById("unknownCaptureBtn")?.addEventListener("click", showUnknownCaptureDialog);
             document.getElementById("checkUpdateBtn")?.addEventListener("click", function() { doCheckUpdate(false); });
+            // 顶部常驻入口：不用再翻进「设置 → 软件更新」，任何标签页都能一键检查
+            document.getElementById("topCheckUpdateBtn")?.addEventListener("click", function() { doCheckUpdate(false); });
             document.getElementById("resetUpdateUrlBtn")?.addEventListener("click", function() {
                 // 清掉可能残留的旧清单地址（或指向缓存/失效镜像的自定义地址），恢复内置的 version.json 直链
                 localStorage.removeItem('update_manifest_url');
@@ -4920,25 +5000,33 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
 
+    // 本轮检查是不是「启动时后台自动发起」的（决定是否尊重「跳过此版本」）
+    let updateCheckSilent = false;
+    const SKIP_VERSION_KEY = 'skipped_update_version';
+    function getSkippedUpdateVersion() { return localStorage.getItem(SKIP_VERSION_KEY) || ''; }
+
     function doCheckUpdate(silent) {
         const repo = (document.getElementById('updateGithubRepo') || {}).value || '';
         const url = (document.getElementById('updateManifestUrl') || {}).value || '';
         saveUpdateConfig();
         // 顺序：先检测软件版本，版本检查结束后再检测赛季 / 精灵是否有新增（见 afterVersionCheck）
+        updateCheckSilent = !!silent;
         pendingDataCheckSilent = !!silent;
         dataCheckedThisRound = false;
         const status = document.getElementById('updateStatus');
-        if (!repo && !url) {
-            if (status) status.textContent = '未填写更新地址，仅检查游戏数据…';
-            if (!silent) alert('请先在「软件更新」填写 GitHub 仓库（格式 owner/repo）');
+        // 发布形态是仓库内 exe + version.json，清单直链优先。旧版把「GitHub 仓库」框排在第一位，
+        // 1.3.0/1.3.1 存下的 owner/repo 会一直残留，导致检查更新改走 Releases → 误报「已是最新版本」。
+        // 1.4.0 起即使两个输入框都空着，也用内置默认清单直链做后台检查，保证每次启动都能查到新版本。
+        const defIsUrl = /^https?:\/\//i.test(DEFAULT_UPDATE_REPO || '');
+        const source = url.trim() || repo.trim() || (defIsUrl ? DEFAULT_UPDATE_REPO.trim() : '');
+        if (!source) {
+            if (status) status.textContent = '未配置更新地址，仅检查游戏数据…';
+            setTopStatus('未配置更新地址，仅检查了游戏数据');
             afterVersionCheck();
             return;
         }
         if (status) status.textContent = '正在检查版本…';
-        // 发布形态是仓库内 exe + version.json，清单直链优先。
-        // 旧版把「GitHub 仓库」框排在第一位，1.3.0/1.3.1 存下的 owner/repo 会一直残留，
-        // 导致检查更新改走 Releases（本仓库没有 Release）→ 误报「已是最新版本」。
-        const source = url.trim() || repo.trim();
+        setTopStatus('正在后台检查更新…');
         if (pythonAPI) pythonAPI.checkUpdate(source);
         else afterVersionCheck();
     }
@@ -4962,11 +5050,13 @@ id="externalLink">🔗 打开查询工具</a>
             // 线上版本比本机还旧 → 一定是读错了地址或命中旧缓存，不能淡定地说「已是最新」
             setStatus('⚠️ ' + (result.message || '读到的线上版本比本机旧'), '#a8622f',
                       '线上 V' + (result.latest || '?') + ' · 本机 V' + APP_VERSION);
+            setTopStatus('⚠️ 读到的线上版本比本机旧，点「检查更新」查看详情', '#a8622f');
             afterVersionCheck();
             return;
         }
         if (result && result.status === 'error') {
             setStatus('检查失败：' + (result.message || ''), '#c23d2b');
+            setTopStatus('检查更新失败：' + (result.message || ''), '#c23d2b');
             afterVersionCheck();
             return;
         }
@@ -4975,72 +5065,138 @@ id="externalLink">🔗 打开查询工具</a>
             const online = (result && result.latest) || '';
             const src = (result && result.source) || '';
             let txt = '已是最新版本 V' + cur;
-            // 把「线上读到几版、从哪条线路读的」摆出来，避免再出现「明明有 1.3.10 却说已是最新」的糊涂账
+            // 把「线上读到几版、从哪条线路读的」摆出来，避免再出现「明明有新版却说已是最新」的糊涂账
             if (online) txt += '（线上 V' + online + (src ? ' · 来源 ' + src : '') + '）';
             if (result && result.message) txt += ' · ' + result.message;
             setStatus(txt, '#5a7a4a', txt);
+            if (!updateInFlight) {
+                setTopStatus(txt);
+                showTopUpdateDot(false);
+                hideUpdatePanel();
+            }
             afterVersionCheck();
             return;
         }
         if (result.status === 'update') {
             setStatus('发现新版本 V' + result.latest + (result.source ? '（来源 ' + result.source + '）' : ''));
             lastUpdateManifest = result;
-            showUpdateDialog(result);
+            showTopUpdateDot(true);
+            // 文件已经换成新版但用户选了「稍后重启」：进程里跑的还是旧代码，
+            // 再检查一次会读到同一个版本号，这时只提示「重启后生效」，不要重复催更新。
+            if (installedPendingRestart && String(result.latest) === installedPendingRestart) {
+                setTopStatus('V' + result.latest + ' 已安装，下次打开软件即可生效', '#2b6e2f');
+                hideUpdatePanel();
+                showTopUpdateDot(false);
+                afterVersionCheck();
+                return;
+            }
+            // 「跳过此版本」只在启动后台检查时生效；用户手动点「检查更新」永远能看到提示。
+            // 线上出了更高的版本时，跳过的版本号对不上，会重新提示。
+            if (updateCheckSilent && getSkippedUpdateVersion() === String(result.latest)) {
+                setTopStatus('发现新版本 V' + result.latest + '（已跳过；点「检查更新」可重新查看）');
+                hideUpdatePanel();
+                afterVersionCheck();
+                return;
+            }
+            setTopStatus('发现新版本 V' + result.latest + '，可在顶部抬头查看更新说明');
+            showUpdateBanner(result);
+            afterVersionCheck();   // 提示不阻塞，游戏数据同步照常继续
         }
     }
 
     // 更新任务在同一时刻只能有一个：重复点「立即更新」会并发下载、进度条来回跳、
-    // 甚至多个替换脚本同时改 exe。这里前端先锁，Python 端 startUpdate 也有一把锁兜底。
+    // 甚至多次替换 exe。这里前端先锁，Python 端 startUpdate 也有一把锁兜底。
     let updateInFlight = false;
     let lastUpdatePct = 0;
+    // 装完但还没重启时，当前进程跑的仍是旧代码；记住版本号，避免重复检查又提示「发现新版本」
+    let installedPendingRestart = '';
 
+    // ---------- 顶部抬头：常驻、非模态，更新提示和进度都不遮挡操作 ----------
+    function setTopStatus(text, color) {
+        const el = document.getElementById('topStatusText');
+        if (el) { el.textContent = text || ''; el.style.color = color || '#7d9870'; }
+    }
+    function showTopUpdateDot(on) {
+        const d = document.getElementById('topUpdateDot');
+        if (d) d.style.display = on ? 'inline' : 'none';
+    }
+    function setTopCheckEnabled(on) {
+        const b = document.getElementById('topCheckUpdateBtn');
+        if (b) { b.disabled = !on; b.style.opacity = on ? '1' : '0.55'; }
+    }
+    function hideUpdatePanel() {
+        const p = document.getElementById('topUpdatePanel');
+        if (p) { p.style.display = 'none'; p.innerHTML = ''; }
+    }
+    function showUpdatePanel(html) {
+        const p = document.getElementById('topUpdatePanel');
+        if (!p) return;
+        p.innerHTML = html;
+        p.style.display = 'block';
+    }
     function setUpdateHint(text, color) {
         const el = document.getElementById('updateHint');
         if (el) { el.textContent = text; el.style.color = color || '#7d9870'; }
     }
 
-    function showUpdateDialog(m) {
-        const modal = document.createElement('div'); modal.className = 'modal';
-        modal.id = 'updateModal';
-        const notes = (m.notes || '').replace(/\n/g, '<br>');
-        modal.innerHTML = `<div class="modal-content" style="max-width:440px;">
-            <h3>发现新版本 V${escapeHtml(m.latest)}</h3>
-            <p style="font-size:0.8rem; color:#5a7a4a;">当前版本：V${escapeHtml(m.current || APP_VERSION)}</p>
-            <div style="font-size:0.8rem; max-height:180px; overflow:auto; background:#f3f7ee; border-radius:12px; padding:8px; margin:8px 0;">${notes || '（无更新说明）'}</div>
-            ${m.mandatory ? '<p style="color:#c23d2b; font-size:0.78rem;">⚠️ 此为强制更新</p>' : ''}
-            <div style="display:flex; gap:8px; margin-top:12px;">
-                <button id="doUpdateBtn" class="primary">立即更新</button>
-                ${m.mandatory ? '' : '<button id="laterUpdateBtn">稍后</button>'}
+    // 发现新版本：抬头横幅，用户可直接更新 / 跳过此版本 / 稍后再说
+    function showUpdateBanner(m) {
+        if (updateInFlight) return;
+        const notes = escapeHtml(m.notes || '（无更新说明）').replace(/\n/g, '<br>');
+        const skipped = getSkippedUpdateVersion() === String(m.latest);
+        showUpdatePanel(`
+            <div class="tb-title">🎉 发现新版本 V${escapeHtml(m.latest)}</div>
+            <div>当前版本 V${escapeHtml(m.current || APP_VERSION)}${m.mandatory ? ' · <b style="color:#c23d2b;">强制更新</b>' : ''}</div>
+            <div class="tb-notes">${notes}</div>
+            ${skipped ? '<div style="color:#a8622f;">你之前跳过过这个版本，手动点「检查更新」时会重新显示。</div>' : ''}
+            <div class="tb-btns">
+                <button id="tbUpdateNowBtn" class="primary small">⬇️ 立即更新</button>
+                ${m.mandatory ? '' : '<button id="tbSkipVersionBtn" class="small">跳过此版本</button>'}
+                <button id="tbLaterBtn" class="small">稍后再说</button>
             </div>
-            <div id="updateProgressWrap" style="display:none; margin-top:12px;">
-                <div style="font-size:0.75rem;"><span id="updatePhase">准备中</span>：<span id="updateProgressText">0</span>%</div>
-                <div style="height:10px; background:#e3eada; border-radius:6px; overflow:hidden; margin-top:4px;">
-                    <div id="updateProgressBar" style="height:100%; width:0%; background:linear-gradient(135deg,#2b6e2f,#4c9e2c); transition:width .2s;"></div>
-                </div>
-                <div id="updateHint" style="font-size:0.72rem; color:#7d9870; line-height:1.5; margin-top:6px; white-space:pre-line;"></div>
-            </div>
-        </div>`;
-        document.body.appendChild(modal);
-        lastUpdatePct = 0;
-        const doBtn = modal.querySelector('#doUpdateBtn');
-        const later = modal.querySelector('#laterUpdateBtn');
-        doBtn.onclick = function() {
-            if (updateInFlight) return;                 // 已在更新中，直接忽略重复点击
-            if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
-            updateInFlight = true;
-            lastUpdatePct = 0;
-            doBtn.disabled = true;
-            doBtn.textContent = '正在更新…';
-            doBtn.style.opacity = '0.65';
-            if (later) later.disabled = true;
-            document.getElementById('updateProgressWrap').style.display = 'block';
-            setUpdateHint('正在下载新版本，请勿关闭软件。支持断点续传，网络波动会自动重试。');
-            pythonAPI.startUpdate(JSON.stringify(lastUpdateManifest));
-        };
-        if (later) later.onclick = () => {
+            <div style="color:#7d9870; font-size:0.7rem; margin-top:5px;">更新进度会显示在顶部抬头，期间可以照常使用软件。</div>
+        `);
+        const now = document.getElementById('tbUpdateNowBtn');
+        if (now) now.onclick = startTopUpdate;
+        const skip = document.getElementById('tbSkipVersionBtn');
+        if (skip) skip.onclick = function () {
             if (updateInFlight) return;
-            modal.remove(); afterVersionCheck();
+            localStorage.setItem(SKIP_VERSION_KEY, String(m.latest));
+            hideUpdatePanel();
+            showTopUpdateDot(false);
+            setTopStatus('已跳过 V' + m.latest + '；出更高版本或点「检查更新」时会再提示');
         };
+        const later = document.getElementById('tbLaterBtn');
+        if (later) later.onclick = function () {
+            if (updateInFlight) return;
+            hideUpdatePanel();
+            setTopStatus('发现新版本 V' + m.latest + '；点「检查更新」可随时查看');
+        };
+    }
+
+    function showUpdateProgressPanel() {
+        showUpdatePanel(`
+            <div class="tb-title" id="updatePhase">准备中</div>
+            <div style="display:flex; justify-content:space-between; gap:8px; font-size:0.72rem; color:#5a7a4a;">
+                <span>正在后台下载并安装新版本，软件可以照常使用</span>
+                <span style="flex:none;"><b id="updateProgressText">0</b>%</span>
+            </div>
+            <div class="tb-progress-track"><div class="tb-progress-fill" id="updateProgressBar"></div></div>
+            <div id="updateHint" style="font-size:0.7rem; color:#7d9870; line-height:1.5; margin-top:6px; white-space:pre-line;"></div>
+        `);
+    }
+
+    function startTopUpdate() {
+        if (updateInFlight) return;                    // 前端锁：重复点击直接忽略
+        if (!pythonAPI) { setTopStatus('程序还没就绪，请稍后再试', '#a8622f'); return; }
+        if (!lastUpdateManifest) { doCheckUpdate(false); return; }
+        updateInFlight = true;
+        lastUpdatePct = 0;
+        setTopCheckEnabled(false);
+        setTopStatus('正在更新…');
+        showUpdateProgressPanel();
+        setUpdateHint('正在下载新版本。支持断点续传，网络波动会自动重试；下载期间可以照常使用软件。');
+        pythonAPI.startUpdate(JSON.stringify(lastUpdateManifest));
     }
 
     function onUpdateProgress(pct, phase) {
@@ -5053,48 +5209,76 @@ id="externalLink">🔗 打开查询工具</a>
         if (bar) bar.style.width = n + '%';
         if (txt) txt.textContent = n;
         if (ph && phase) ph.textContent = phase;
+        setTopStatus('正在更新：' + (phase || '处理中') + ' ' + n + '%');
     }
 
     function onUpdateLog(msg) {
         if (updateInFlight) setUpdateHint(String(msg || ''));
     }
 
+    // 安装完成不自动关软件：由用户决定立即重启，还是下次打开自然生效
     function onUpdateDone() {
-        onUpdateProgress(100, '已安装');
-        setUpdateHint('新版本已安装，软件即将关闭并自动重新打开；如果没有自动打开，请手动运行程序（本机数据不会丢）。', '#2b6e2f');
+        updateInFlight = false;
+        setTopCheckEnabled(true);
+        lastUpdatePct = 100;
+        const v = lastUpdateManifest ? lastUpdateManifest.latest : '';
+        localStorage.removeItem(SKIP_VERSION_KEY);
+        installedPendingRestart = String(v || '');
+        showTopUpdateDot(false);
+        setTopStatus('V' + v + ' 已安装，等待重启生效', '#2b6e2f');
+        showUpdatePanel(`
+            <div class="tb-title">✅ 更新完成，V${escapeHtml(v)} 已安装</div>
+            <div>新版文件已经替换好，本机数据不会丢。现在重启可立刻用上新版；也可以继续用当前窗口，<b>下次打开软件时自动就是新版</b>。</div>
+            <div class="tb-btns">
+                <button id="tbRestartNowBtn" class="primary small">🔁 立即重启</button>
+                <button id="tbRestartLaterBtn" class="small">稍后重启</button>
+            </div>
+        `);
+        const rn = document.getElementById('tbRestartNowBtn');
+        if (rn) rn.onclick = function () { if (pythonAPI) pythonAPI.restartApp(); };
+        const rl = document.getElementById('tbRestartLaterBtn');
+        if (rl) rl.onclick = function () {
+            // 保留一条很窄的抬头提示 + 重启入口，改主意时不用重新检查更新
+            showUpdatePanel(`
+                <div class="tb-title">✅ V${escapeHtml(v)} 已安装</div>
+                <div>继续用当前窗口即可，<b>下次打开软件自动是新版</b>；想马上用也可以现在重启。</div>
+                <div class="tb-btns"><button id="tbRestartNowBtn2" class="primary small">🔁 立即重启</button></div>
+            `);
+            const b2 = document.getElementById('tbRestartNowBtn2');
+            if (b2) b2.onclick = function () { if (pythonAPI) pythonAPI.restartApp(); };
+            setTopStatus('V' + v + ' 已安装，下次打开软件时生效', '#2b6e2f');
+        };
     }
 
     function onUpdateError(obj) {
         updateInFlight = false;
+        setTopCheckEnabled(true);
         const msg = (obj && obj.message) ? obj.message : '未知错误';
         const status = document.getElementById('updateStatus');
         if (status) status.textContent = '更新失败：' + msg.replace(/\n/g, ' ');
-        // 不再弹英文原始报错：错误直接写在弹窗里，按钮变「重试更新」
-        const doBtn = document.getElementById('doUpdateBtn');
-        const later = document.getElementById('laterUpdateBtn');
-        if (doBtn) {
-            doBtn.disabled = false;
-            doBtn.style.opacity = '1';
-            doBtn.textContent = '重试更新';
-        }
-        if (later) {
-            later.disabled = false;
-            later.textContent = '稍后';
-        }
-        setUpdateHint(msg + '\n（下载失败不会改动现有程序，可以放心重试）', '#a8622f');
+        setTopStatus('更新失败：' + msg.replace(/\n/g, ' '), '#c23d2b');
+        showUpdatePanel(`
+            <div class="tb-title" style="color:#c23d2b;">❌ 更新失败</div>
+            <div style="white-space:pre-line;">${escapeHtml(msg)}</div>
+            <div style="color:#7d9870; font-size:0.7rem; margin-top:4px;">下载失败不会改动现有程序，可以放心重试。</div>
+            <div class="tb-btns">
+                <button id="tbRetryBtn" class="primary small">重试更新</button>
+                <button id="tbCloseErrBtn" class="small">关闭</button>
+            </div>
+        `);
+        const rb = document.getElementById('tbRetryBtn');
+        if (rb) rb.onclick = function () { if (!updateInFlight) startTopUpdate(); };
+        const cb = document.getElementById('tbCloseErrBtn');
+        if (cb) cb.onclick = hideUpdatePanel;
     }
 
+    // 每次启动都后台检查一次版本。通道是异步就绪的，所以既在通道回调里调用，
+    // 也在 init() 末尾兜底，用 autoCheckStarted 保证只发一次请求。
+    let autoCheckStarted = false;
     function maybeAutoCheckUpdate() {
-        const repo = localStorage.getItem('update_github_repo') || '';
-        const url = localStorage.getItem('update_manifest_url') || '';
-        if (!pythonAPI) return;
-        if (repo || url) {
-            // 启动后静默检查一次（内部先查版本，再查赛季 / 精灵新增）
-            setTimeout(() => doCheckUpdate(true), 1500);
-        } else if (getDataPackUrl()) {
-            // 没配版本地址也要检查数据包，否则新赛季永远同步不到
-            setTimeout(() => checkGameDataUpdates(true), 1500);
-        }
+        if (!pythonAPI || autoCheckStarted) return;
+        autoCheckStarted = true;
+        setTimeout(function () { doCheckUpdate(true); }, 1200);
     }
 
     // 启动后静默同步一次游戏数据由 initPythonAPI 的通道就绪回调触发（时序更可靠）
@@ -6077,14 +6261,9 @@ class PythonAPI(QObject):
                 emit_progress(100, "校验通过，正在安装")
                 # 进程内直接替换：失败会抛异常，此时绝不退出程序
                 apply_self_update(old_path, new_path)
+                # 1.4.0 起安装完成不自动关软件：抬头会问「立即重启 / 稍后重启」，
+                # 选稍后则继续用当前进程，下次打开软件自然就是新版。
                 self.sigRunJs.emit("onUpdateDone()")
-                # 尝试拉起新实例；即使失败，文件已经换好，用户手动打开即可
-                try:
-                    subprocess.Popen([old_path], close_fds=True)
-                except Exception:
-                    pass
-                time.sleep(0.8)
-                os._exit(0)
             except Exception as e:
                 failed = True
                 msg = _friendly_download_error(e)
@@ -6113,6 +6292,23 @@ class PythonAPI(QObject):
                         pass
                 with self._update_lock:
                     self._update_running = False
+        threading.Thread(target=_run, daemon=True).start()
+
+    @pyqtSlot()
+    def restartApp(self):
+        """用户在抬头点「立即重启」：拉起已替换好的新 exe，再结束当前进程。
+
+        1.4.0 起安装完成不再自动退出，用户可以选择继续用当前窗口，
+        等下次打开软件时自然加载新版本（文件此时已经替换好了）。
+        """
+        def _run():
+            time.sleep(0.3)
+            try:
+                subprocess.Popen([os.path.abspath(sys.executable)], close_fds=True)
+            except Exception:
+                pass
+            time.sleep(0.5)
+            os._exit(0)
         threading.Thread(target=_run, daemon=True).start()
 
     @pyqtSlot(str, str, str)
