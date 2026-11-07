@@ -1,9 +1,9 @@
 {
-  "version": "1.4.1",
+  "version": "1.4.2",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.4.1：修复点「立即重启」后弹出英文「Failed to remove temporary directory」报错框。原因是 1.4.0 用 os._exit(0) 硬杀进程，跳过了 Qt 的有序清理，QWebEngine 子进程仍占用 PyInstaller 解压的临时目录，导致退出时删不掉而弹窗。现改为走 QApplication 正常退出（先关窗口、释放资源再 quit），临时目录能被干净删除，不再弹窗；同时更新成功后清理约 87MB 的临时安装包。仍停留在 1.4.0 及更早的电脑，请直接下载 dist 下 exe 覆盖一次（不丢本机数据）。详见 CHANGELOG.md 与 操作指引.md。",
+  "notes": "v1.4.2：真正修掉「点立即重启弹英文临时目录报错框」和「检查更新失败：base_library.zip 不存在」。根因是 PyInstaller 单文件模式会把解压目录写进环境变量（_MEIPASS2），子进程继承后，重启拉起的新实例会复用同一个临时目录：旧进程退出时删不掉（弹 Failed to remove temporary directory），两个进程还会互相删掉对方的 base_library.zip。现在拉起新实例时重置该环境（PYINSTALLER_RESET_ENVIRONMENT=1 并剔除 _MEIPASS2 等），新版本解压到自己的目录，互不干扰；退出恢复为正常关闭并加 3 秒强制退出兜底；启动时还会清理历史残留的临时目录（本机清出 5 个共 2.1GB）。仍停留在 1.4.1 及更早的电脑，可直接下载 dist 下 exe 覆盖一次（不丢本机数据）。详见 CHANGELOG.md 与 操作指引.md。",
   "mandatory": false,
-  "sha256": "2cb422a3e13f5ef4b3988407761b07b6abdf3f390a776e0de5e7d96404154f7e",
+  "sha256": "5c474034482b9996ff6055daf37b716572831e6ad4cf5ee23dffa0bfe62545ab",
   "pub_date": "2026-11-07",
-  "size": 87291107
+  "size": 87296532
 }

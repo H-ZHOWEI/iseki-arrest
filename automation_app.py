@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -5055,8 +5055,8 @@ id="externalLink">🔗 打开查询工具</a>
             return;
         }
         if (result && result.status === 'error') {
-            setStatus('检查失败：' + (result.message || ''), '#c23d2b');
-            setTopStatus('检查更新失败：' + (result.message || ''), '#c23d2b');
+            setStatus(result.message || '检查更新失败', '#c23d2b');
+            setTopStatus(result.message || '检查更新失败', '#c23d2b');
             afterVersionCheck();
             return;
         }
@@ -6081,7 +6081,15 @@ class PythonAPI(QObject):
             except urllib.error.HTTPError as e:
                 result = {"status": "error", "message": "HTTP 错误 %s：%s" % (e.code, e.reason)}
             except Exception as e:
-                result = {"status": "error", "message": "检查更新失败：%s" % e}
+                raw = str(e)
+                if 'base_library' in raw or '_MEI' in raw:
+                    # 临时目录被上一次「立即重启」的残留进程删掉一部分，属于程序自愈能处理的异常，
+                    # 不要抛出让人摸不着头脑的英文路径错误。
+                    result = {"status": "error",
+                              "message": ("更新组件临时目录损坏（通常是上一次「立即重启」残留进程抢占了临时目录）。"
+                                          "请完全关闭软件（含任务管理器里的进程）后重新打开，再点「检查更新」即可，本机数据不会丢失。")}
+                else:
+                    result = {"status": "error", "message": "检查更新失败：%s" % raw}
             try:
                 self.sigRunJs.emit("onUpdateChecked(%s)" % json.dumps(result, ensure_ascii=False))
             except Exception:
@@ -6302,31 +6310,52 @@ class PythonAPI(QObject):
 
     @pyqtSlot()
     def restartApp(self):
-        """用户在抬头点「立即重启」：先拉起已替换好的新 exe，再正常退出当前进程。
+        """用户在抬头点「立即重启」：先以全新环境拉起新 exe，再正常退出当前进程。
 
-        1.4.0 起安装完成不再自动退出，用户可以选择继续用当前窗口，
-        等下次打开软件时自然加载新版本（文件此时已经替换好了）。
+        关键在 PYINSTALLER_RESET_ENVIRONMENT：PyInstaller onefile 的引导程序会把解压目录写进
+        环境变量（_MEIPASS2 / _PYI_APPLICATION_HOME_DIR），并且**子进程默认继承这份环境**。
+        如果直接 Popen 新 exe，新实例一看 _MEIPASS2 已存在就复用同一个 _MEI 目录、不再自行解压，
+        于是新旧两个进程共用同一份临时文件：旧的引导程序退出时删不掉目录（被新进程占着），
+        弹出「Failed to remove temporary directory」；两边还会互相删掉对方的 base_library.zip，
+        表现为「检查更新失败：No such file or directory: ..._MEIxxxx\\base_library.zip」。
+        设置 PYINSTALLER_RESET_ENVIRONMENT=1 并剔除继承来的解压路径，新实例就会解压到自己的
+        独立 _MEI 目录，两个进程互不干扰。
 
-        注意：这里走 QApplication 正常退出，**不要**用 os._exit()。原因是 os._exit 会跳过
-        Python / Qt 的有序清理，QWebEngine 的渲染、GPU 等子进程还没释放对 PyInstaller
-        解压目录（_MEIxxxx）里文件的占用，bootloader 在退出时删除该临时目录就会失败，
-        弹出一个英文的「Failed to remove temporary directory」报错框。正常 quit 让 Qt 先把
-        这些子进程和句柄释放干净，临时目录就能被顺利删掉，不再弹窗。"""
+        退出方式：正常 quit（Qt 先释放 QWebEngine 子进程与文件句柄），引导程序即可顺利清掉
+        自己的 _MEI 目录，不弹框。quit 若 3 秒内没生效，再用 os._exit 兜底，保证一定退出。
+        """
         exe = os.path.abspath(sys.executable)
+        env = os.environ.copy()
+        for k in ("_MEIPASS2", "_PYI_APPLICATION_HOME_DIR", "_PYI_ARCHIVE_FILE"):
+            env.pop(k, None)
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         try:
-            subprocess.Popen([exe], close_fds=True)
+            subprocess.Popen(
+                [exe], close_fds=True, env=env,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
         except Exception:
             pass
+
+        def _fallback_exit():
+            time.sleep(3.0)
+            os._exit(0)
+
+        threading.Thread(target=_fallback_exit, daemon=True).start()
         app = QApplication.instance()
         if app is not None:
             try:
                 app.closeAllWindows()
             except Exception:
                 pass
-            app.processEvents()
-            time.sleep(0.3)
+            try:
+                app.processEvents()
+            except Exception:
+                pass
             app.quit()
         else:
+            time.sleep(0.2)
             os._exit(0)
 
     @pyqtSlot(str, str, str)
@@ -6559,7 +6588,40 @@ def resource_path(name):
 
 
 # ----------------------------- 主程序 ---------------------------------
+def cleanup_orphan_mei():
+    """启动时清理历史残留的 PyInstaller 临时目录（_MEIxxxx）与未完成下载的临时安装包。
+
+    只删除「当前进程没在用」且「能删得动（没被其它进程锁住）」的目录/文件，尽力而为，失败静默跳过。
+    这能防止多次「立即重启」后临时目录堆积、甚至新旧进程撞名竞争同一目录导致 base_library.zip 缺失。"""
+    try:
+        import shutil, glob
+        base = getattr(sys, "_MEIPASS", None)
+        tmp = tempfile.gettempdir()
+        if os.path.isdir(tmp):
+            for name in os.listdir(tmp):
+                if not name.startswith("_MEI"):
+                    continue
+                full = os.path.join(tmp, name)
+                if not os.path.isdir(full):
+                    continue
+                if base and os.path.abspath(full) == os.path.abspath(base):
+                    continue
+                try:
+                    shutil.rmtree(full)
+                except Exception:
+                    pass
+        for pat in ("iseki_new_*.exe",):
+            for f in glob.glob(os.path.join(tmp, pat)):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def main():
+    cleanup_orphan_mei()
     app = QtWidgets.QApplication(sys.argv)
     app.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     app.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
@@ -6598,6 +6660,13 @@ def main():
     def cleanup():
         try:
             os.unlink(tmp_file.name)
+        except Exception:
+            pass
+        # 退出前先关掉 QWebEngineView，让渲染 / GPU 子进程释放对 PyInstaller 临时目录
+        # （_MEIxxxx）里文件的占用，避免退出清理时弹出英文「Failed to remove temporary directory」。
+        try:
+            view.close()
+            app.processEvents()
         except Exception:
             pass
     
