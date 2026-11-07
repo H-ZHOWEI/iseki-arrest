@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.10"
+APP_VERSION = "1.3.11"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -1031,16 +1031,17 @@ id="externalLink">🔗 打开查询工具</a>
             </div>
             <div class="settings-grid">
                 <div style="grid-column: 1 / -1;">
-                    <label>GitHub 仓库（owner/repo，走 Releases 时填写）</label>
+                    <label>GitHub 仓库（仅走 GitHub Releases 时填写；本软件用下面的 version.json 清单发布，日常留空即可）</label>
                     <input type="text" id="updateGithubRepo" class="search-box" style="width:100%;" placeholder="H-ZHOWEI/iseki-arrest">
                 </div>
                 <div style="grid-column: 1 / -1;">
-                    <label>更新清单直链（version.json，默认已填仓库内清单，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）</label>
+                    <label>更新清单直链（version.json，默认已填仓库内清单；检查更新以此框为准）</label>
                     <input type="text" id="updateManifestUrl" class="search-box" style="width:100%;" placeholder="https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json">
                 </div>
             </div>
             <div style="display:flex; gap:8px; margin-top:10px; align-items:center; flex-wrap:wrap;">
                 <button id="checkUpdateBtn" class="primary small">检查更新</button>
+                <button id="resetUpdateUrlBtn" class="small">恢复默认更新地址</button>
                 <span id="updateStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
             </div>
 
@@ -3611,6 +3612,20 @@ id="externalLink">🔗 打开查询工具</a>
             document.getElementById("pasteImportBtn")?.addEventListener("click", pasteImport);
             document.getElementById("unknownCaptureBtn")?.addEventListener("click", showUnknownCaptureDialog);
             document.getElementById("checkUpdateBtn")?.addEventListener("click", function() { doCheckUpdate(false); });
+            document.getElementById("resetUpdateUrlBtn")?.addEventListener("click", function() {
+                // 清掉可能残留的旧清单地址（或指向缓存/失效镜像的自定义地址），恢复内置的 version.json 直链
+                localStorage.removeItem('update_manifest_url');
+                const def = DEFAULT_UPDATE_REPO || '';
+                const defIsUrl = /^https?:\/\//i.test(def);
+                const urlInp = document.getElementById('updateManifestUrl');
+                if (urlInp) urlInp.value = defIsUrl ? def : '';
+                if (!defIsUrl) {
+                    const repoInp = document.getElementById('updateGithubRepo');
+                    if (repoInp) repoInp.value = def;
+                }
+                const st = document.getElementById('updateStatus');
+                if (st) { st.textContent = '已恢复默认更新地址，请再点一次「检查更新」'; st.style.color = '#5a7a4a'; }
+            });
             console.log("Python API 已连接");
         });
     }
@@ -4920,7 +4935,10 @@ id="externalLink">🔗 打开查询工具</a>
             return;
         }
         if (status) status.textContent = '正在检查版本…';
-        const source = repo.trim() || url.trim();
+        // 发布形态是仓库内 exe + version.json，清单直链优先。
+        // 旧版把「GitHub 仓库」框排在第一位，1.3.0/1.3.1 存下的 owner/repo 会一直残留，
+        // 导致检查更新改走 Releases（本仓库没有 Release）→ 误报「已是最新版本」。
+        const source = url.trim() || repo.trim();
         if (pythonAPI) pythonAPI.checkUpdate(source);
         else afterVersionCheck();
     }
@@ -4934,18 +4952,38 @@ id="externalLink">🔗 打开查询工具</a>
 
     function onUpdateChecked(result) {
         const status = document.getElementById('updateStatus');
-        if (!result || result.status === 'noupdate') {
-            if (status) status.textContent = '已是最新版本（' + (result ? (result.current || APP_VERSION) : APP_VERSION) + '）';
+        const setStatus = function (txt, color, title) {
+            if (!status) return;
+            status.textContent = txt;
+            status.style.color = color || '#5a7a4a';
+            if (title) status.title = title;
+        };
+        if (result && result.status === 'stale') {
+            // 线上版本比本机还旧 → 一定是读错了地址或命中旧缓存，不能淡定地说「已是最新」
+            setStatus('⚠️ ' + (result.message || '读到的线上版本比本机旧'), '#a8622f',
+                      '线上 V' + (result.latest || '?') + ' · 本机 V' + APP_VERSION);
             afterVersionCheck();
             return;
         }
-        if (result.status === 'error') {
-            if (status) status.textContent = '检查失败：' + result.message;
+        if (result && result.status === 'error') {
+            setStatus('检查失败：' + (result.message || ''), '#c23d2b');
+            afterVersionCheck();
+            return;
+        }
+        if (!result || result.status === 'noupdate') {
+            const cur = (result && result.current) || APP_VERSION;
+            const online = (result && result.latest) || '';
+            const src = (result && result.source) || '';
+            let txt = '已是最新版本 V' + cur;
+            // 把「线上读到几版、从哪条线路读的」摆出来，避免再出现「明明有 1.3.10 却说已是最新」的糊涂账
+            if (online) txt += '（线上 V' + online + (src ? ' · 来源 ' + src : '') + '）';
+            if (result && result.message) txt += ' · ' + result.message;
+            setStatus(txt, '#5a7a4a', txt);
             afterVersionCheck();
             return;
         }
         if (result.status === 'update') {
-            if (status) status.textContent = '发现新版本 V' + result.latest;
+            setStatus('发现新版本 V' + result.latest + (result.source ? '（来源 ' + result.source + '）' : ''));
             lastUpdateManifest = result;
             showUpdateDialog(result);
         }
@@ -5195,6 +5233,73 @@ def http_get_json_multi(url, timeout=12, max_candidates=None):
         if e not in uniq:
             uniq.append(e)
     raise RuntimeError("；".join(uniq) if uniq else "无可用地址")
+
+
+def fetch_version_manifest(url, timeout=6, max_wait=10):
+    """版本清单（version.json）专用：并发请求主地址与全部镜像，取版本号最高的那份。
+
+    为什么不能「第一个成功就返回」：
+      jsDelivr / ghproxy 等 CDN 会按固定 URL 缓存 version.json。1.3.10 之前只给主地址
+      加 `?_t=` 破缓存，镜像一律用固定 URL；国内 raw 主地址连不上时就会读到旧清单，
+      把线上 1.3.10 读成 1.3.6，于是提示「已是最新版本（1.3.6）」。
+    现在每条线路都带 `_t`，并发取回后按 version 字段取最新，个别节点缓存旧版也影响不了结果。
+    返回 (manifest_dict, 命中地址)；全部失败抛 RuntimeError（中文原因）。
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    candidates = [url] + _mirror_urls(url)
+    ts = int(time.time())
+    jobs = []
+    for u in candidates:
+        sep = '&' if '?' in u else '?'
+        jobs.append((u + sep + '_t=%d' % ts, u))
+
+    def _vkey(v):
+        p = parse_version(v)
+        return p + (0,) * max(0, 6 - len(p))
+
+    def _fetch(au, orig):
+        try:
+            return http_get_json(au, timeout=timeout, retries=0), orig, ''
+        except Exception as e:
+            return None, orig, "%s → %s" % (_host_of(orig), _err_text(e))
+
+    good, errors = [], []
+    pool = ThreadPoolExecutor(max_workers=min(6, len(jobs)))
+    try:
+        pending = set(pool.submit(_fetch, au, u) for au, u in jobs)
+        deadline = time.monotonic() + max_wait
+        first_ok_at = None
+        grace = 1.5          # 拿到第一份清单后再给其它线路 1.5 秒，取其中版本号最高的
+        while pending and time.monotonic() < deadline:
+            if first_ok_at is None:
+                left = deadline - time.monotonic()
+            else:
+                left = min(deadline - time.monotonic(),
+                           first_ok_at + grace - time.monotonic())
+                if left <= 0:
+                    break
+            done, pending = wait(pending, timeout=max(0.05, left),
+                                 return_when=FIRST_COMPLETED)
+            for f in done:
+                data, orig, err = f.result()
+                if isinstance(data, dict) and data.get('version'):
+                    good.append((_vkey(str(data['version'])), data, orig))
+                    if first_ok_at is None:
+                        first_ok_at = time.monotonic()
+                elif err:
+                    errors.append(err)
+            if not done:
+                break            # 剩下的线路太慢，用已拿到的结果，不必干等
+    finally:
+        pool.shutdown(wait=False)
+    if good:
+        good.sort(key=lambda x: x[0])
+        return good[-1][1], good[-1][2]
+    uniq = []
+    for e in errors:
+        if e not in uniq:
+            uniq.append(e)
+    raise RuntimeError("；".join(uniq[:4]) if uniq else "所有更新地址均不可用")
 
 
 def github_put_file(repo, path, branch, token, body, message, timeout=60):
@@ -5758,28 +5863,73 @@ class PythonAPI(QObject):
     def checkUpdate(self, source_url):
         """检查更新（后台线程，结果经 onUpdateChecked 回调）。
         source 支持两种形式：
-          - GitHub 仓库 'owner/repo'（或完整 releases/latest 地址）→ 走 Releases API；
-          - 任意 version.json 直链（兼容旧模式）。"""
+          - GitHub 仓库 'owner/repo'（或 releases API 地址）→ 走 Releases API，
+            仓库没有 Release 时自动回退到内置的 version.json 清单；
+          - version.json 直链 → 并发走主地址 + 镜像，取版本号最高的那份。
+        结果一律带 current / latest / source，方便前端把「为什么已是最新」讲清楚。"""
+        def _manifest_result(manifest, used):
+            latest = str(manifest.get("version", ""))
+            cmp = compare_versions(latest, APP_VERSION)
+            base = {"current": APP_VERSION, "latest": latest,
+                    "source": _host_of(used) if used else ""}
+            if cmp < 0:
+                d = dict(base)
+                d["status"] = "stale"
+                d["message"] = ("读到的线上版本 V%s 比本机 V%s 还旧，多半是更新地址填错或命中旧缓存。"
+                                "请点「恢复默认更新地址」后重试，或直接从仓库下载最新版覆盖安装。"
+                                % (latest, APP_VERSION))
+                return d
+            if cmp == 0:
+                d = dict(base)
+                d["status"] = "noupdate"
+                return d
+            d = dict(base)
+            d["status"] = "update"
+            d.update({
+                "notes": manifest.get("notes", ""),
+                "download_url": manifest.get("download_url", ""),
+                "mandatory": bool(manifest.get("mandatory", False)),
+                "sha256": manifest.get("sha256", ""),
+                "size": int(manifest.get("size") or 0),
+                "manifest_url": used,
+            })
+            return d
+
         def _run():
             result = {"status": "noupdate", "message": ""}
             try:
                 source = (source_url or "").strip()
+                low = source.lower()
+                # 只有 owner/repo 或明确的 releases 地址才走 Releases；
+                # github.com/.../raw/main/version.json 这类直链必须当清单处理。
+                is_repo = bool(re.match(r'^[\w.\-]+/[\w.\-]+$', source))
+                is_release = ('/releases' in low or 'api.github.com' in low)
                 if not source:
-                    result = {"status": "noupdate", "message": "未配置更新来源"}
-                elif re.match(r'^[\w.\-]+/[\w.\-]+$', source) or 'github.com' in source.lower():
+                    result = {"status": "error", "message": "未配置更新来源，请点「恢复默认更新地址」"}
+                elif is_repo or is_release:
                     info = fetch_github_release(source)
                     if not info:
-                        result = {"status": "noupdate", "message": "该仓库暂无 Release"}
+                        # 仓库没有 Release 不能说「已是最新版本」：发布形态是仓库内 exe + version.json
+                        if re.match(r'^https?://', DEFAULT_UPDATE_REPO or ''):
+                            manifest, used = fetch_version_manifest(DEFAULT_UPDATE_REPO)
+                            result = _manifest_result(manifest, used)
+                            result["message"] = "该仓库暂无 Release，已自动改用仓库内更新清单检查"
+                        else:
+                            result = {"status": "noupdate", "current": APP_VERSION, "latest": "",
+                                      "source": "GitHub Releases",
+                                      "message": "该仓库暂无 Release，且未配置更新清单直链"}
                     else:
                         latest = info.get("version", "")
                         cmp = compare_versions(latest, APP_VERSION)
                         if cmp <= 0:
-                            result = {"status": "noupdate", "current": APP_VERSION, "latest": latest}
+                            result = {"status": "noupdate", "current": APP_VERSION,
+                                      "latest": latest, "source": "GitHub Releases"}
                         else:
                             result = {
                                 "status": "update",
                                 "current": APP_VERSION,
                                 "latest": latest,
+                                "source": "GitHub Releases",
                                 "notes": info.get("notes", ""),
                                 "download_url": info.get("download_url", ""),
                                 "mandatory": False,
@@ -5788,23 +5938,8 @@ class PythonAPI(QObject):
                                 "manifest_url": "github:" + source,
                             }
                 else:
-                    manifest, used_manifest = http_get_json_multi(source, timeout=12)
-                    latest = str(manifest.get("version", ""))
-                    cmp = compare_versions(latest, APP_VERSION)
-                    if cmp <= 0:
-                        result = {"status": "noupdate", "current": APP_VERSION, "latest": latest}
-                    else:
-                        result = {
-                            "status": "update",
-                            "current": APP_VERSION,
-                            "latest": latest,
-                            "notes": manifest.get("notes", ""),
-                            "download_url": manifest.get("download_url", ""),
-                            "mandatory": bool(manifest.get("mandatory", False)),
-                            "sha256": manifest.get("sha256", ""),
-                            "size": int(manifest.get("size") or 0),
-                            "manifest_url": used_manifest,
-                        }
+                    manifest, used_manifest = fetch_version_manifest(source)
+                    result = _manifest_result(manifest, used_manifest)
             except urllib.error.HTTPError as e:
                 result = {"status": "error", "message": "HTTP 错误 %s：%s" % (e.code, e.reason)}
             except Exception as e:
@@ -5825,7 +5960,11 @@ class PythonAPI(QObject):
                 target = (url or "").strip()
                 if not target:
                     raise ValueError("未配置数据包地址")
-                pack, used = http_get_json_multi(target, timeout=15)
+                # 数据包是「整文件覆盖」上传的，固定 URL 容易被 CDN 缓存住上传前的旧内容；
+                # 带一个时间戳让主地址和镜像都回源，保证拿到的是刚上传的那份。
+                sep = '&' if '?' in target else '?'
+                fresh = target + sep + '_t=%d' % int(time.time())
+                pack, used = http_get_json_multi(fresh, timeout=15)
                 if not isinstance(pack, dict):
                     raise ValueError("数据包格式错误（应为 JSON 对象）")
                 result = {"status": "ok", "pack": pack, "source": used}

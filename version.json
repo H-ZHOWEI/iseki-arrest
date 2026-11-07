@@ -1,9 +1,9 @@
 {
-  "version": "1.3.10",
+  "version": "1.3.11",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.3.10：修复「检查更新」的多个问题并大幅提速。下载改为最多 5 路并发分段 + 断点续传 + 自动切换备用线路（raw/ghproxy/github.com/raw/jsDelivr），网络中断只重下受影响的一段；「立即更新」不再能重复点击，进度条只增不减；失败不再弹英文报错，改为中文提示 +「重试更新」；修复进度走完软件关闭后仍是旧版本（等 onefile 父子进程都退出、先改名再替换、写日志）。更新前做目录可写预检。详见 CHANGELOG.md。",
+  "notes": "v1.3.11：修复老版本「明明有新版却提示已是最新版本」。原因是旧版会优先查 GitHub Releases（本仓库没有 Release）或读到 CDN 缓存的旧清单。现在检查更新以 version.json 直链为准，主地址与所有镜像并发请求且全部避开缓存，按版本号取最新；无 Release 时自动回退清单。状态栏显示线上版本与检查来源，新增「恢复默认更新地址」按钮；读到旧版本时给出橙色提示。仍停留在 1.3.6 的电脑建议直接下载 exe 覆盖安装一次。详见 CHANGELOG.md。",
   "mandatory": false,
-  "sha256": "8bb0a5e9576186e70537a0ce6bfee4a401b891b63d8c785b9a805be93020602a",
+  "sha256": "7c4a53ce0f81df498f2b88bfd09e552d488ba99e2c7bdaea330498bdbc5c7e07",
   "pub_date": "2026-11-07",
-  "size": 86775413
+  "size": 87287428
 }
