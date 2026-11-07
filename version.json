@@ -1,9 +1,9 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.4.0：更新体验重做。① 页面新增顶部常驻抬头，「检查更新」随手可点，不用再翻进设置页；② 每次打开软件都会在后台自动查一次版本，发现新版在抬头提示「立即更新 / 跳过此版本 / 稍后再说」，不弹窗、不挡操作；跳过只对该版本生效，出了更高版本或手动点检查更新都会重新提示；③ 下载进度、阶段、日志都搬到抬头，更新期间照常使用软件；④ 安装完成后不再自动关闭软件，抬头询问「立即重启」或「稍后重启」——选稍后就继续用当前窗口，下次打开软件自动是新版，本机数据不丢。旧版（1.3.12 及更早）请直接下载 dist/异色逮捕计划.exe 覆盖一次，跨过这一跳后即可享受后台自动检查。详见 CHANGELOG.md 与 操作指引.md。",
+  "notes": "v1.4.1：修复点「立即重启」后弹出英文「Failed to remove temporary directory」报错框。原因是 1.4.0 用 os._exit(0) 硬杀进程，跳过了 Qt 的有序清理，QWebEngine 子进程仍占用 PyInstaller 解压的临时目录，导致退出时删不掉而弹窗。现改为走 QApplication 正常退出（先关窗口、释放资源再 quit），临时目录能被干净删除，不再弹窗；同时更新成功后清理约 87MB 的临时安装包。仍停留在 1.4.0 及更早的电脑，请直接下载 dist 下 exe 覆盖一次（不丢本机数据）。详见 CHANGELOG.md 与 操作指引.md。",
   "mandatory": false,
-  "sha256": "7fe5bd14eafc851d25f98de76f22b2d50634ddaac1c4c77968f9d0dbbc4645ca",
+  "sha256": "2cb422a3e13f5ef4b3988407761b07b6abdf3f390a776e0de5e7d96404154f7e",
   "pub_date": "2026-11-07",
-  "size": 87289512
+  "size": 87291107
 }

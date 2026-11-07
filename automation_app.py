@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -6261,6 +6261,12 @@ class PythonAPI(QObject):
                 emit_progress(100, "校验通过，正在安装")
                 # 进程内直接替换：失败会抛异常，此时绝不退出程序
                 apply_self_update(old_path, new_path)
+                # 替换成功后临时安装包已无用，及时清理（否则每次更新会在 Temp 留下 87MB）
+                if new_path and os.path.exists(new_path):
+                    try:
+                        os.remove(new_path)
+                    except OSError:
+                        pass
                 # 1.4.0 起安装完成不自动关软件：抬头会问「立即重启 / 稍后重启」，
                 # 选稍后则继续用当前进程，下次打开软件自然就是新版。
                 self.sigRunJs.emit("onUpdateDone()")
@@ -6296,20 +6302,32 @@ class PythonAPI(QObject):
 
     @pyqtSlot()
     def restartApp(self):
-        """用户在抬头点「立即重启」：拉起已替换好的新 exe，再结束当前进程。
+        """用户在抬头点「立即重启」：先拉起已替换好的新 exe，再正常退出当前进程。
 
         1.4.0 起安装完成不再自动退出，用户可以选择继续用当前窗口，
         等下次打开软件时自然加载新版本（文件此时已经替换好了）。
-        """
-        def _run():
-            time.sleep(0.3)
+
+        注意：这里走 QApplication 正常退出，**不要**用 os._exit()。原因是 os._exit 会跳过
+        Python / Qt 的有序清理，QWebEngine 的渲染、GPU 等子进程还没释放对 PyInstaller
+        解压目录（_MEIxxxx）里文件的占用，bootloader 在退出时删除该临时目录就会失败，
+        弹出一个英文的「Failed to remove temporary directory」报错框。正常 quit 让 Qt 先把
+        这些子进程和句柄释放干净，临时目录就能被顺利删掉，不再弹窗。"""
+        exe = os.path.abspath(sys.executable)
+        try:
+            subprocess.Popen([exe], close_fds=True)
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app is not None:
             try:
-                subprocess.Popen([os.path.abspath(sys.executable)], close_fds=True)
+                app.closeAllWindows()
             except Exception:
                 pass
-            time.sleep(0.5)
+            app.processEvents()
+            time.sleep(0.3)
+            app.quit()
+        else:
             os._exit(0)
-        threading.Thread(target=_run, daemon=True).start()
 
     @pyqtSlot(str, str, str)
     def previewRemotePack(self, repo, path, branch):
