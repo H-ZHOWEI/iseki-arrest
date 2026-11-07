@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.3.10"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -4951,10 +4951,21 @@ id="externalLink">🔗 打开查询工具</a>
         }
     }
 
+    // 更新任务在同一时刻只能有一个：重复点「立即更新」会并发下载、进度条来回跳、
+    // 甚至多个替换脚本同时改 exe。这里前端先锁，Python 端 startUpdate 也有一把锁兜底。
+    let updateInFlight = false;
+    let lastUpdatePct = 0;
+
+    function setUpdateHint(text, color) {
+        const el = document.getElementById('updateHint');
+        if (el) { el.textContent = text; el.style.color = color || '#7d9870'; }
+    }
+
     function showUpdateDialog(m) {
         const modal = document.createElement('div'); modal.className = 'modal';
+        modal.id = 'updateModal';
         const notes = (m.notes || '').replace(/\n/g, '<br>');
-        modal.innerHTML = `<div class="modal-content" style="max-width:420px;">
+        modal.innerHTML = `<div class="modal-content" style="max-width:440px;">
             <h3>发现新版本 V${escapeHtml(m.latest)}</h3>
             <p style="font-size:0.8rem; color:#5a7a4a;">当前版本：V${escapeHtml(m.current || APP_VERSION)}</p>
             <div style="font-size:0.8rem; max-height:180px; overflow:auto; background:#f3f7ee; border-radius:12px; padding:8px; margin:8px 0;">${notes || '（无更新说明）'}</div>
@@ -4964,32 +4975,75 @@ id="externalLink">🔗 打开查询工具</a>
                 ${m.mandatory ? '' : '<button id="laterUpdateBtn">稍后</button>'}
             </div>
             <div id="updateProgressWrap" style="display:none; margin-top:12px;">
-                <div style="font-size:0.75rem;">更新进度：<span id="updateProgressText">0</span>%</div>
+                <div style="font-size:0.75rem;"><span id="updatePhase">准备中</span>：<span id="updateProgressText">0</span>%</div>
                 <div style="height:10px; background:#e3eada; border-radius:6px; overflow:hidden; margin-top:4px;">
                     <div id="updateProgressBar" style="height:100%; width:0%; background:linear-gradient(135deg,#2b6e2f,#4c9e2c); transition:width .2s;"></div>
                 </div>
+                <div id="updateHint" style="font-size:0.72rem; color:#7d9870; line-height:1.5; margin-top:6px; white-space:pre-line;"></div>
             </div>
         </div>`;
         document.body.appendChild(modal);
-        modal.querySelector('#doUpdateBtn').onclick = function() {
-            document.getElementById('updateProgressWrap').style.display = 'block';
-            if (pythonAPI) pythonAPI.startUpdate(JSON.stringify(lastUpdateManifest));
-        };
+        lastUpdatePct = 0;
+        const doBtn = modal.querySelector('#doUpdateBtn');
         const later = modal.querySelector('#laterUpdateBtn');
-        if (later) later.onclick = () => { modal.remove(); afterVersionCheck(); };
+        doBtn.onclick = function() {
+            if (updateInFlight) return;                 // 已在更新中，直接忽略重复点击
+            if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
+            updateInFlight = true;
+            lastUpdatePct = 0;
+            doBtn.disabled = true;
+            doBtn.textContent = '正在更新…';
+            doBtn.style.opacity = '0.65';
+            if (later) later.disabled = true;
+            document.getElementById('updateProgressWrap').style.display = 'block';
+            setUpdateHint('正在下载新版本，请勿关闭软件。支持断点续传，网络波动会自动重试。');
+            pythonAPI.startUpdate(JSON.stringify(lastUpdateManifest));
+        };
+        if (later) later.onclick = () => {
+            if (updateInFlight) return;
+            modal.remove(); afterVersionCheck();
+        };
     }
 
-    function onUpdateProgress(pct) {
+    function onUpdateProgress(pct, phase) {
+        const n = Math.max(0, Math.min(100, Number(pct) || 0));
+        if (n < lastUpdatePct) return;               // 进度只增不减，杜绝「鬼畜」
+        lastUpdatePct = n;
         const bar = document.getElementById('updateProgressBar');
         const txt = document.getElementById('updateProgressText');
-        if (bar) bar.style.width = pct + '%';
-        if (txt) txt.textContent = pct;
+        const ph = document.getElementById('updatePhase');
+        if (bar) bar.style.width = n + '%';
+        if (txt) txt.textContent = n;
+        if (ph && phase) ph.textContent = phase;
     }
-    function onUpdateDone() { /* 即将退出并由更新脚本重启 */ }
+
+    function onUpdateLog(msg) {
+        if (updateInFlight) setUpdateHint(String(msg || ''));
+    }
+
+    function onUpdateDone() {
+        onUpdateProgress(100, '安装中');
+        setUpdateHint('校验通过，软件即将自动关闭并替换为新版本，稍后会自动重新打开。', '#2b6e2f');
+    }
+
     function onUpdateError(obj) {
+        updateInFlight = false;
+        const msg = (obj && obj.message) ? obj.message : '未知错误';
         const status = document.getElementById('updateStatus');
-        if (status) status.textContent = '更新失败：' + (obj && obj.message ? obj.message : '未知错误');
-        alert('更新失败：' + (obj && obj.message ? obj.message : '未知错误'));
+        if (status) status.textContent = '更新失败：' + msg.replace(/\n/g, ' ');
+        // 不再弹英文原始报错：错误直接写在弹窗里，按钮变「重试更新」
+        const doBtn = document.getElementById('doUpdateBtn');
+        const later = document.getElementById('laterUpdateBtn');
+        if (doBtn) {
+            doBtn.disabled = false;
+            doBtn.style.opacity = '1';
+            doBtn.textContent = '重试更新';
+        }
+        if (later) {
+            later.disabled = false;
+            later.textContent = '稍后';
+        }
+        setUpdateHint(msg + '\n（下载失败不会改动现有程序，可以放心重试）', '#a8622f');
     }
 
     function maybeAutoCheckUpdate() {
@@ -5220,22 +5274,242 @@ def _raise_github_error(e):
     raise RuntimeError(hint + (('：' + detail) if detail else ''))
 
 
-def http_download(url, dest, timeout=120, progress_cb=None):
-    req = urllib.request.Request(url, headers={'User-Agent': 'IsekiArrest-Updater'})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        total = resp.headers.get('Content-Length')
-        total = int(total) if total and total.isdigit() else 0
-        written = 0
-        chunk = 64 * 1024
-        with open(dest, 'wb') as f:
-            while True:
-                buf = resp.read(chunk)
-                if not buf:
-                    break
-                f.write(buf)
-                written += len(buf)
-                if progress_cb and total:
-                    progress_cb(min(100, int(written / total * 100)))
+def _update_candidate_urls(url):
+    """给 exe 直链生成备用线路：主地址 → 带时间戳绕坏缓存 → 两个 ghproxy → github.com/raw → jsDelivr。
+    注意：jsDelivr 对 GitHub 上超过 20MB 的文件会 403，只作最后兜底。"""
+    u = (url or "").strip()
+    if not u:
+        return []
+    out = [u]
+    m = re.match(r'https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)', u)
+    if m:
+        clean = u.split('?', 1)[0]
+        sep = '&' if '?' in u else '?'
+        out.append(u + sep + '_t=%d' % int(time.time()))
+        out.append("https://ghproxy.net/" + clean)
+        out.append("https://gh-proxy.com/" + clean)
+        owner, repo, branch, path = m.groups()
+        out.append("https://github.com/%s/%s/raw/%s/%s" % (owner, repo, branch, path))
+        out.append("https://fastly.jsdelivr.net/gh/%s/%s@%s/%s" % (owner, repo, branch, path))
+    seen, res = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            res.append(x)
+    return res
+
+
+def _probe_range(url, timeout=10):
+    """用 1 字节 Range 请求探测线路：返回 (文件总大小, 是否支持断点/分段)。"""
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'IsekiArrest-Updater',
+        'Range': 'bytes=0-0',
+        'Cache-Control': 'no-cache',
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        total, supports = 0, False
+        cr = r.headers.get('Content-Range') or ''
+        if cr and '/' in cr:
+            supports = True
+            try:
+                total = int(cr.rsplit('/', 1)[1])
+            except (ValueError, IndexError):
+                total = 0
+        if not total:
+            cl = r.headers.get('Content-Length')
+            if cl and cl.isdigit():
+                total = int(cl)
+        try:
+            r.read(64)      # 把响应体读掉，连接可复用
+        except Exception:
+            pass
+        return total, supports
+
+
+def _friendly_download_error(e):
+    """把底层英文网络异常翻成用户能照着做的中文，绝不把原始 traceback 甩给玩家。
+    注意 _err_text 会先把异常规范化成「读超时 / 域名解析失败」等中文，两种写法都要认。"""
+    s = _err_text(e)
+    low = (str(e) + ' ' + s).lower()
+    if '没有写入权限' in s or '校验不通过' in s or '不是有效的可执行程序' in s or '缺少 download_url' in low:
+        return s
+    if any(k in low for k in ('timed out', 'timeout', 'read operation', '读超时', '超时', '926')):
+        return ("下载超时：网络在传输过程中断开了，已自动重试并切换线路。\n"
+                "可以点「重试更新」继续（已下载的部分会自动续传），或换个网络再试。")
+    if any(k in low for k in ('connection reset', 'forcibly closed', 'connection aborted',
+                              'remote end', '连接被重置', '10054')):
+        return ("网络连接被重置（国内访问 GitHub 常见），已自动切换线路重试。\n"
+                "仍失败的话请点「重试更新」或稍后再试。")
+    if any(k in low for k in ('getaddrinfo', 'name or service not known', '11001',
+                              'dns', 'nodename', '域名解析失败')):
+        return "连不上下载地址（DNS / 网络异常）。请确认网络正常后点「重试更新」。"
+    if ' 404' in ' ' + s or s.strip().startswith('404') or 'not found' in low:
+        return "找不到新版本安装包（404），可能是发布者还没上传完整，请稍后再试。"
+    if ' 403' in ' ' + s or ' 429' in ' ' + s:
+        return "下载地址被限流，已切换线路；仍失败请稍后再试。"
+    if s.startswith(('全部线路', '下载', '更新', '当前为', '程序所在', '分段', '文件大小')):
+        return s
+    return "更新失败：" + s
+
+
+def _fetch_range(url, start, end, part_path, timeout=25, retries=5, on_bytes=None):
+    """把 [start, end] 这段下载到 part_path；中断后按已写字节续传。返回写入字节数。"""
+    want = end - start + 1
+    last = None
+    for attempt in range(retries):
+        offset = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+        if offset >= want:
+            return offset
+        headers = {
+            'User-Agent': 'IsekiArrest-Updater',
+            'Cache-Control': 'no-cache',
+            'Range': 'bytes=%d-%d' % (start + offset, end),
+        }
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status = getattr(resp, 'status', None) or resp.getcode()
+                # 服务端忽略了 Range（返回整包）→ 清掉本段从头下，避免拼接错位
+                if offset and status != 206:
+                    offset = 0
+                    with open(part_path, 'wb'):
+                        pass
+                with open(part_path, 'ab') as f:
+                    while True:
+                        buf = resp.read(64 * 1024)
+                        if not buf:
+                            break
+                        f.write(buf)
+                        offset += len(buf)
+                        if on_bytes:
+                            on_bytes(len(buf))
+            if offset >= want:
+                return offset
+            last = RuntimeError("本段只收到 %d/%d 字节" % (offset, want))
+        except Exception as e:
+            last = e
+        time.sleep(min(1.5 + attempt, 5))
+    raise RuntimeError("分段下载失败：%s" % _err_text(last))
+
+
+class _DownloadProgress(object):
+    """多线程进度聚合：只在百分比上升时回传，避免进度条来回跳（鬼畜）。"""
+    def __init__(self, total, cb):
+        self.total = total or 0
+        self.cb = cb
+        self.lock = threading.Lock()
+        self.done = 0
+        self.last = -1
+
+    def add(self, n):
+        if not self.cb or not self.total:
+            return
+        with self.lock:
+            self.done += n
+            pct = min(99, int(self.done * 100 / self.total))
+            if pct > self.last:
+                self.last = pct
+                try:
+                    self.cb(pct)
+                except Exception:
+                    pass
+
+
+def http_download_fast(url, dest, expected_size=0, progress_cb=None, log_cb=None,
+                       workers=5, timeout=25):
+    """多线程分段 + 断点续传 + 多线路回退下载 exe。返回 {url, size, workers}。
+    实测 GitHub raw / ghproxy 都支持 Range（206），4~6 路并发比单连接快数倍；
+    单段读超时只影响那一段，重试时从已写字节继续，不会从头再来。"""
+    urls = _update_candidate_urls(url)
+    if not urls:
+        raise ValueError("下载地址为空")
+    errors = []
+    for cand in urls:
+        try:
+            if log_cb:
+                log_cb("正在尝试线路：" + _host_of(cand))
+            total, supports = _probe_range(cand, timeout=10)
+            if expected_size and total and total != expected_size:
+                raise RuntimeError("文件大小与清单不符（%d ≠ %d）" % (total, expected_size))
+            if not total:
+                total = expected_size          # 探测不到就用清单里的 size
+            if not total:
+                # 极端情况：服务端不给大小、清单也没写 → 退化为普通单流下载，
+                # 进度只报到 50%，最终靠 SHA256 / MZ 头保证文件正确
+                req = urllib.request.Request(cand, headers={'User-Agent': 'IsekiArrest-Updater'})
+                with urllib.request.urlopen(req, timeout=30) as r, open(dest, 'wb') as f:
+                    while True:
+                        buf = r.read(64 * 1024)
+                        if not buf:
+                            break
+                        f.write(buf)
+                if progress_cb:
+                    progress_cb(50)
+                return {'url': cand, 'size': os.path.getsize(dest), 'workers': 1}
+            prog = _DownloadProgress(total, progress_cb)
+            n = 1
+            if supports:
+                n = max(1, min(6, workers, int(total // (4 * 1024 * 1024)) or 1))
+            chunk = (total + n - 1) // n
+            bounds = []
+            for i in range(n):
+                s = i * chunk
+                e = min(total - 1, (i + 1) * chunk - 1)
+                if s <= e:
+                    bounds.append((s, e))
+            parts = [dest + '.part%d' % i for i in range(len(bounds))]
+            for p in parts:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+            failures = []
+
+            def worker(idx, s, e, path):
+                try:
+                    _fetch_range(cand, s, e, path, timeout=timeout,
+                                 retries=5, on_bytes=prog.add)
+                except Exception as ex:
+                    failures.append((idx, ex))
+
+            threads = [threading.Thread(target=worker, args=(i, s, e, parts[i]), daemon=True)
+                       for i, (s, e) in enumerate(bounds)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            if failures:
+                raise RuntimeError("第 %s 段下载失败：%s" % (
+                    ','.join(str(i + 1) for i, _ in failures), _err_text(failures[0][1])))
+            with open(dest, 'wb') as out:
+                for p in parts:
+                    with open(p, 'rb') as f:
+                        while True:
+                            buf = f.read(1024 * 1024)
+                            if not buf:
+                                break
+                            out.write(buf)
+            for p in parts:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            got = os.path.getsize(dest)
+            if got != total:
+                raise RuntimeError("下载不完整（%d/%d 字节）" % (got, total))
+            return {'url': cand, 'size': total, 'workers': len(bounds)}
+        except Exception as e:
+            errors.append("%s → %s" % (_host_of(cand), _err_text(e)))
+            if log_cb:
+                log_cb("线路不通，换下一条")
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except OSError:
+                pass
+            continue
+    raise RuntimeError("全部线路均失败：" + "；".join(errors[:3]))
 
 
 def sha256_of_file(path):
@@ -5281,47 +5555,104 @@ def fetch_github_release(repo):
                 download_url = a.get("browser_download_url", "")
                 break
     notes = rel.get("body", "") or ""
-    return {"version": version, "download_url": download_url, "notes": notes}
+    size = 0
+    for a in assets:
+        if a.get("browser_download_url") == download_url:
+            size = int(a.get("size") or 0)
+            break
+    return {"version": version, "download_url": download_url, "notes": notes, "size": size}
 
 
-def build_updater_script(old_path, new_path, parent_pid):
-    """生成一个 PowerShell 更新脚本（UTF-8 BOM，避免中文/编码问题），负责等主程序退出后替换并重启。"""
-    ps = (
-        '$ErrorActionPreference = "Stop"\n'
-        'param($oldPath, $newPath, $pidToWait)\n'
-        'try {\n'
-        '  if ($pidToWait) { Wait-Process -Id $pidToWait -Timeout 30 -ErrorAction SilentlyContinue }\n'
-        '  Start-Sleep -Seconds 1\n'
-        '  $backup = $oldPath + ".bak"\n'
-        '  if (Test-Path $oldPath) { Copy-Item $oldPath $backup -Force }\n'
-        '  Copy-Item $newPath $oldPath -Force\n'
-        '  Remove-Item $newPath -Force -ErrorAction SilentlyContinue\n'
-        '  Start-Process -FilePath $oldPath\n'
-        '} catch {\n'
-        '  try {\n'
-        '    Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -oldPath `"$oldPath`" -newPath `"$newPath`" -pidToWait 0"\n'
-        '  } catch {\n'
-        '    Add-Type -AssemblyName System.Windows.Forms\n'
-        '    [System.Windows.Forms.MessageBox]::Show("更新失败，请以管理员身份手动覆盖程序：`n$_", "异色逮捕-更新")\n'
-        '  }\n'
-        '}\n'
-    )
+def build_updater_script(old_path, new_path, child_pid, parent_pid, log_path):
+    """生成 PowerShell 更新脚本（UTF-8 BOM）。
+    关键：onefile 打包的程序有「bootloader 父进程 + Python 子进程」两个进程，
+    os._exit(0) 只结束子进程；必须等父进程也退出、exe 文件句柄释放后才能覆盖，
+    否则 Copy-Item 会「文件正在使用」而静默失败——这正是「软件关了却还是旧版本」的原因。"""
+    ps = r'''
+param($oldPath, $newPath, $pidA, $pidB, $logPath)
+$ErrorActionPreference = "Continue"
+function Log($m) {
+  try { Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) -Encoding UTF8 } catch {}
+}
+try {
+  Log "开始替换 old=$oldPath new=$newPath pidA=$pidA pidB=$pidB"
+  $deadline = (Get-Date).AddSeconds(120)
+  foreach ($p in @($pidA, $pidB)) {
+    if ($p -and ([int]$p -gt 0) -and ([int]$p -ne $PID)) {
+      while ((Get-Date) -lt $deadline) {
+        $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue
+        if (-not $proc) { break }
+        Start-Sleep -Milliseconds 250
+      }
+    }
+  }
+  Start-Sleep -Seconds 1
+  $backup = $oldPath + ".bak"
+  $ok = $false
+  for ($i = 1; $i -le 20; $i++) {
+    try {
+      if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
+      # 先把正在运行的旧 exe 改名（Windows 允许重命名运行中的 exe），再复制新文件到原名
+      Move-Item -LiteralPath $oldPath -Destination $backup -Force -ErrorAction Stop
+      Copy-Item -LiteralPath $newPath -Destination $oldPath -Force -ErrorAction Stop
+      $len = (Get-Item -LiteralPath $oldPath).Length
+      $fs = [System.IO.File]::OpenRead($oldPath)
+      $head = New-Object byte[] 2
+      [void]$fs.Read($head, 0, 2)
+      $fs.Close()
+      if ($head[0] -ne 77 -or $head[1] -ne 90) { throw "复制后的文件不是有效 exe" }
+      $ok = $true
+      Log "替换成功，新文件大小=$len"
+      break
+    } catch {
+      Log ("第 $i 次尝试失败：" + $_.Exception.Message)
+      if (-not (Test-Path -LiteralPath $oldPath) -and (Test-Path -LiteralPath $backup)) {
+        Move-Item -LiteralPath $backup -Destination $oldPath -Force -ErrorAction SilentlyContinue
+      }
+      Start-Sleep -Seconds 1
+    }
+  }
+  if (-not $ok) { throw "无法替换程序文件（程序可能仍在运行，或目录没有写入权限）" }
+  Remove-Item -LiteralPath $newPath -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath $oldPath
+  Log "完成，已启动新版本"
+} catch {
+  Log ("致命错误：" + $_.Exception.Message)
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    [void][System.Windows.Forms.MessageBox]::Show(
+      "自动更新没能完成：`n" + $_.Exception.Message + "`n`n请手动把新版本 exe 复制到软件目录覆盖原文件。`n`n日志：" + $logPath,
+      "异色逮捕 - 更新未完成")
+  } catch {}
+}
+'''
     fd, path = tempfile.mkstemp(suffix='.ps1', prefix='iseki_update_')
     with os.fdopen(fd, 'wb') as f:
-        f.write(b'\xef\xbb\xbf')  # UTF-8 BOM
+        f.write(b'\xef\xbb\xbf')
         f.write(ps.encode('utf-8'))
     return path
 
 
 def apply_self_update(old_path, new_path):
-    """启动外部更新脚本并退出当前进程，由脚本完成替换与重启。"""
-    parent_pid = os.getpid()
-    ps_path = build_updater_script(old_path, new_path, parent_pid)
-    subprocess.Popen(['powershell', '-ExecutionPolicy', 'Bypass', '-File', ps_path,
-                      old_path, new_path, str(parent_pid)])
-    # 给更新脚本一点时间启动后再退出，确保本进程释放文件句柄
-    import time
-    time.sleep(0.5)
+    """启动独立更新脚本后退出，由脚本完成替换与重启。"""
+    child_pid = os.getpid()
+    try:
+        parent_pid = os.getppid()
+    except Exception:
+        parent_pid = 0
+    log_path = os.path.join(tempfile.gettempdir(), 'iseki_update.log')
+    ps_path = build_updater_script(old_path, new_path, child_pid, parent_pid, log_path)
+    flags = 0
+    if os.name == 'nt':
+        flags = (getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+                 | getattr(subprocess, 'DETACHED_PROCESS', 0))
+    subprocess.Popen(
+        ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps_path,
+         old_path, new_path, str(child_pid), str(parent_pid), log_path],
+        creationflags=flags, close_fds=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 给脚本一点启动时间，随后立即退出以释放 exe 句柄
+    time.sleep(0.6)
     os._exit(0)
 
 
@@ -5453,6 +5784,7 @@ class PythonAPI(QObject):
                                 "download_url": info.get("download_url", ""),
                                 "mandatory": False,
                                 "sha256": "",
+                                "size": int(info.get("size") or 0),
                                 "manifest_url": "github:" + source,
                             }
                 else:
@@ -5470,6 +5802,7 @@ class PythonAPI(QObject):
                             "download_url": manifest.get("download_url", ""),
                             "mandatory": bool(manifest.get("mandatory", False)),
                             "sha256": manifest.get("sha256", ""),
+                            "size": int(manifest.get("size") or 0),
                             "manifest_url": used_manifest,
                         }
             except urllib.error.HTTPError as e:
@@ -5573,40 +5906,97 @@ class PythonAPI(QObject):
 
     @pyqtSlot(str)
     def startUpdate(self, manifestJson):
-        """根据 manifest 下载并自更新（后台线程，进度通过 onUpdateProgress / onUpdateDone 回调）。"""
+        """下载并自更新。同一时刻只允许一个更新任务（防止重复点击导致进度条鬼畜 / 多次替换）。"""
+        if not hasattr(self, '_update_lock'):
+            self._update_lock = threading.Lock()
+        with self._update_lock:
+            if getattr(self, '_update_running', False):
+                return                      # 静默忽略重复点击，前端按钮也已禁用
+            self._update_running = True
+
+        def emit_progress(pct, phase):
+            try:
+                self.sigRunJs.emit("onUpdateProgress(%d, %s)" % (
+                    int(pct), json.dumps(phase, ensure_ascii=False)))
+            except Exception:
+                pass
+
+        def emit_log(msg):
+            try:
+                self.sigRunJs.emit("onUpdateLog(%s)" % json.dumps(msg, ensure_ascii=False))
+            except Exception:
+                pass
+
         def _run():
+            new_path = None
+            failed = False
             try:
                 if not getattr(sys, 'frozen', False):
                     raise RuntimeError("当前为开发模式（未打包成 exe），无法执行自更新，请打包后再更新。")
                 manifest = json.loads(manifestJson)
-                download_url = manifest.get("download_url", "")
-                expected_sha = manifest.get("sha256", "")
+                download_url = (manifest.get("download_url") or "").strip()
+                expected_sha = (manifest.get("sha256") or "").strip()
+                try:
+                    expected_size = int(manifest.get("size") or 0)
+                except (TypeError, ValueError):
+                    expected_size = 0
                 if not download_url:
-                    raise ValueError("manifest 缺少 download_url")
-                self.sigRunJs.emit("onUpdateProgress(%d)" % 5)
+                    raise ValueError("更新清单缺少 download_url")
+
+                old_path = os.path.abspath(sys.executable)
+                # 先确认目标目录可写：不能写就直接提示，绝不把用户软件白白关掉
+                probe = os.path.join(os.path.dirname(old_path), '.iseki_write_test')
+                try:
+                    with open(probe, 'w') as f:
+                        f.write('ok')
+                    os.remove(probe)
+                except Exception:
+                    raise RuntimeError(
+                        "程序所在目录没有写入权限，无法自动覆盖。\n"
+                        "请把软件移到普通文件夹（不要放 C:\\Program Files），"
+                        "或右键「以管理员身份运行」后再点更新。")
+
+                emit_progress(2, "准备下载")
                 fd, new_path = tempfile.mkstemp(suffix='.exe', prefix='iseki_new_')
                 os.close(fd)
-                http_download(download_url, new_path, timeout=300,
-                              progress_cb=lambda p: self.sigRunJs.emit("onUpdateProgress(%d)" % max(5, p)))
-                # 基础校验：必须是 PE 可执行文件（以 MZ 开头），避免下载到错误页面
+                info = http_download_fast(
+                    download_url, new_path, expected_size=expected_size,
+                    progress_cb=lambda p: emit_progress(p, "下载中"),
+                    log_cb=emit_log, workers=5, timeout=25)
+                emit_log("下载完成（%d 路并发），正在校验安装包" % info['workers'])
+                emit_progress(99, "校验安装包")
+
                 with open(new_path, 'rb') as f:
                     magic = f.read(2)
                 if magic != b'MZ':
-                    raise ValueError("下载文件不是有效的可执行程序（校验失败）")
+                    raise ValueError("下载到的文件不是有效的可执行程序，可能线路返回了错误页面，请点「重试更新」")
+                got = os.path.getsize(new_path)
+                if expected_size and got != expected_size:
+                    raise ValueError("安装包大小不符（%d ≠ %d 字节），请点「重试更新」" % (got, expected_size))
                 if expected_sha:
                     actual = sha256_of_file(new_path)
                     if actual.lower() != expected_sha.lower():
-                        raise ValueError("SHA256 校验不通过，文件可能被篡改或下载不完整")
-                self.sigRunJs.emit("onUpdateProgress(100)")
-                old_path = os.path.abspath(sys.executable)
+                        raise ValueError("SHA256 校验不通过，文件可能下载不完整或被篡改，请点「重试更新」")
+
+                emit_progress(100, "校验通过，正在安装")
                 self.sigRunJs.emit("onUpdateDone()")
-                apply_self_update(old_path, new_path)
+                apply_self_update(old_path, new_path)   # 内部 os._exit(0)，不会回来
             except Exception as e:
+                failed = True
+                msg = _friendly_download_error(e)
                 try:
-                    self.sigRunJs.emit(
-                        "onUpdateError(%s)" % json.dumps({"message": str(e)}, ensure_ascii=False))
+                    self.sigRunJs.emit("onUpdateError(%s)" % json.dumps(
+                        {"message": msg, "detail": _err_text(e)}, ensure_ascii=False))
                 except Exception:
                     pass
+            finally:
+                if failed and new_path and os.path.exists(new_path):
+                    try:
+                        os.remove(new_path)
+                    except OSError:
+                        pass
+                with self._update_lock:
+                    self._update_running = False
         threading.Thread(target=_run, daemon=True).start()
 
     @pyqtSlot(str, str, str)
