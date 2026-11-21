@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -5046,6 +5046,18 @@ id="externalLink">🔗 打开查询工具</a>
             status.style.color = color || '#5a7a4a';
             if (title) status.title = title;
         };
+        if (result && result.fell_back) {
+            // 设置里留的是本机测试地址（127.0.0.1 / localhost），Python 已自动改用官方地址重查。
+            // 顺手把这条只会在这台电脑上生效的设置清掉，免得以后每次启动都先撞一次「连接被拒绝」。
+            try {
+                localStorage.removeItem('update_manifest_url');
+                localStorage.removeItem('update_github_repo');
+                const um = document.getElementById('updateManifestUrl');
+                const ug = document.getElementById('updateGithubRepo');
+                if (um) um.value = '';
+                if (ug) ug.value = '';
+            } catch (e) {}
+        }
         if (result && result.status === 'stale') {
             // 线上版本比本机还旧 → 一定是读错了地址或命中旧缓存，不能淡定地说「已是最新」
             setStatus('⚠️ ' + (result.message || '读到的线上版本比本机旧'), '#a8622f',
@@ -5338,6 +5350,21 @@ def _mirror_urls(url):
 def _host_of(url):
     m = re.match(r'https?://([^/]+)', url or '')
     return m.group(1) if m else (url or '')[:24]
+
+
+def _is_loopback_url(url):
+    """地址是否指向本机（127.0.0.1 / localhost / ::1）。
+
+    这类地址只可能是「本机测试服务器」，别人电脑上必然连不上。
+    用户曾经填过测试地址后忘记清掉，就会在别的电脑上报「连接被拒绝」，
+    所以检查更新遇到本机地址失败时要自动回退到官方地址，而不是直接报错。
+    """
+    u = (url or '').strip().lower()
+    if not u:
+        return False
+    m = re.match(r'^https?://(\[[^\]]+\]|[^/:]+)', u)
+    host = m.group(1).strip('[]') if m else ''
+    return host in ('127.0.0.1', 'localhost', '::1', '0.0.0.0', '127.1.1.1')
 
 
 def _err_text(e):
@@ -6082,7 +6109,22 @@ class PythonAPI(QObject):
                 result = {"status": "error", "message": "HTTP 错误 %s：%s" % (e.code, e.reason)}
             except Exception as e:
                 raw = str(e)
-                if 'base_library' in raw or '_MEI' in raw:
+                if _is_loopback_url(source_url or ""):
+                    # 填的是本机测试地址（127.0.0.1 / localhost），这台电脑上没起测试服务器，
+                    # 别人电脑/重装后都会必然失败。直接回退官方清单检查，别丢一句「连接被拒绝」。
+                    host = _host_of(source_url or "")
+                    try:
+                        manifest, used = fetch_version_manifest(DEFAULT_UPDATE_REPO)
+                        d = _manifest_result(manifest, used)
+                        d["fell_back"] = True
+                        d["message"] = "原填的本机测试地址 %s 不可用，已自动改用官方地址（该测试地址已清除）" % host
+                        result = d
+                    except Exception as e2:
+                        result = {"status": "error", "fell_back": True,
+                                  "message": ("你填的更新地址是本机测试地址（%s），这台电脑上测试服务器没在运行；"
+                                              "改用官方地址也没连上（%s）。请点「恢复默认更新地址」后重试。"
+                                              % (host, (_err_text(e2) or '网络不通')))}
+                elif 'base_library' in raw or '_MEI' in raw:
                     # 临时目录被上一次「立即重启」的残留进程删掉一部分，属于程序自愈能处理的异常，
                     # 不要抛出让人摸不着头脑的英文路径错误。
                     result = {"status": "error",

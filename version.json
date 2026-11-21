@@ -1,9 +1,9 @@
 {
-  "version": "1.4.2",
+  "version": "1.4.3",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.4.2：真正修掉「点立即重启弹英文临时目录报错框」和「检查更新失败：base_library.zip 不存在」。根因是 PyInstaller 单文件模式会把解压目录写进环境变量（_MEIPASS2），子进程继承后，重启拉起的新实例会复用同一个临时目录：旧进程退出时删不掉（弹 Failed to remove temporary directory），两个进程还会互相删掉对方的 base_library.zip。现在拉起新实例时重置该环境（PYINSTALLER_RESET_ENVIRONMENT=1 并剔除 _MEIPASS2 等），新版本解压到自己的目录，互不干扰；退出恢复为正常关闭并加 3 秒强制退出兜底；启动时还会清理历史残留的临时目录（本机清出 5 个共 2.1GB）。仍停留在 1.4.1 及更早的电脑，可直接下载 dist 下 exe 覆盖一次（不丢本机数据）。详见 CHANGELOG.md 与 操作指引.md。",
+  "notes": "v1.4.3：修掉「检查更新失败：127.0.0.1:8137 → 连接被拒绝」。原因是设置里残留了之前测试用的本机地址（127.0.0.1 / localhost），这类地址只有本机测试服务器开着时才通，换台电脑或服务器没启动就必然连不上。现在检查更新会自动识别本机地址并改用官方更新地址重查，同时把这条无效设置自动清掉，不再甩一句让人看不懂的「连接被拒绝」；如果官方地址也连不上，会提示点「恢复默认更新地址」后重试。其余功能与 1.4.2 一致。详见 CHANGELOG.md 与 操作指引.md。",
   "mandatory": false,
-  "sha256": "5c474034482b9996ff6055daf37b716572831e6ad4cf5ee23dffa0bfe62545ab",
-  "pub_date": "2026-11-07",
-  "size": 87296532
+  "sha256": "fe0f29806585717475ea782de67fda523a4e36ee8b5b313b8c35fe57327f2e07",
+  "pub_date": "2026-11-21",
+  "size": 87298569
 }
