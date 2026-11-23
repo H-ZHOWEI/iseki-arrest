@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6.2"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -4242,17 +4242,31 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     //   · 不想进导航栏：给板块加 data-nav-skip="1"
     //   · 标题太长又不想加属性：在 NAV_LABEL_OVERRIDE 里加一条 id -> 短名
     const NAV_LABEL_OVERRIDE = {
-        'dailyStatsCard': '每日需抓轮数',
-        'card-total-gap': '总缺口分析',
-        'card-unknown': '未知捕捉',
-        'card-unknown-list': '未知记录',
-        'card-battle': '战斗获得'
+        'dailyStatsCard': '📊 每日需抓轮数',
+        'card-total-gap': '📊 总缺口分析',
+        'card-unknown': '🎲 未知捕捉',
+        'card-unknown-list': '❓ 未知记录',
+        'card-battle': '⚔️ 战斗获得'
     };
 
-    // 从板块元素里取出一个像样的标题
-    function _navLabelOf(el) {
-        if (el.dataset.navLabel) return el.dataset.navLabel;
-        if (NAV_LABEL_OVERRIDE[el.id]) return NAV_LABEL_OVERRIDE[el.id];
+    // 取标题开头的图标（emoji）。
+    // 注意：短名一旦写了但漏掉图标，导航栏那一条就会「空一格、没图标」（V1.6.2 修的正是这个）。
+    // 所以这里额外做一层兜底：短名没有图标时，自动继承原标题的图标。
+    function _leadIcon(text) {
+        if (!text) return '';
+        const m = String(text).trim().match(/^([^\s\w\u4e00-\u9fa5]+)/);
+        if (!m) return '';
+        const head = m[1].trim();
+        try {
+            return /\p{Extended_Pictographic}/u.test(head) ? head : '';
+        } catch (e) {
+            // 老内核不支持 Unicode 属性转义时的兜底：码点高于 0x2100 基本就是符号/emoji
+            return /[\u2100-\u2BFF\uD800-\uDBFF]/.test(head) ? head : '';
+        }
+    }
+
+    // 取出板块原始标题文本（保留开头的 emoji）
+    function _navHeadText(el) {
         const h = el.querySelector(':scope > .card-header h2, :scope > h2');
         if (h && h.textContent.trim()) {
             // 去掉 stat-badge 之类的小尾巴（如待捕捉数量的数字）
@@ -4263,9 +4277,25 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         }
         // total-gap-panel 这类没有 card-header 的：取第一个带 font-weight 的子元素
         const strong = el.querySelector(':scope > div[style*="font-weight"], :scope > span[style*="font-weight"]');
-        if (strong && strong.textContent.trim()) return strong.textContent.trim();
+        if (strong && strong.textContent.trim()) {
+            return strong.textContent.replace(/\s+/g, ' ').trim();
+        }
+        return '';
+    }
+
+    // 从板块元素里取出一个像样的标题
+    function _navLabelOf(el) {
+        const head = _navHeadText(el);
+        let label = '';
+        if (el.dataset.navLabel) label = el.dataset.navLabel;
+        else if (NAV_LABEL_OVERRIDE[el.id]) label = NAV_LABEL_OVERRIDE[el.id];
+        else if (head) label = head;
         // 兜底：用 id 去掉 card- 前缀
-        return String(el.id || '').replace(/^card-/, '') || '板块';
+        else label = String(el.id || '').replace(/^card-/, '') || '板块';
+        // 短名漏写图标时，自动补上原标题的图标，保证每条导航都有图标
+        const icon = _leadIcon(head);
+        if (icon && !_leadIcon(label)) label = icon + ' ' + label;
+        return label;
     }
 
     // 侧边栏垂直居中对齐到「整数设备像素」：
