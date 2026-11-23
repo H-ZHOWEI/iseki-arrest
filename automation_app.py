@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -5034,7 +5034,13 @@ id="externalLink">🔗 打开查询工具</a>
     const SKIP_VERSION_KEY = 'skipped_update_version';
     function getSkippedUpdateVersion() { return localStorage.getItem(SKIP_VERSION_KEY) || ''; }
 
+    // 防连点：一次检查没回来之前，重复点「检查更新」直接忽略。
+    // 连点会并发发起多个 checkUpdate，各自读清单；刚发版时个别线路命中旧 CDN 缓存，
+    // 只要有一次读到旧版本就会回调 stale，覆盖掉正常的「已是最新」，弹出误报警告。
+    let checkUpdateInFlight = false;
+    let checkUpdateUnlockTimer = null;
     function doCheckUpdate(silent) {
+        if (checkUpdateInFlight) return;
         const repo = (document.getElementById('updateGithubRepo') || {}).value || '';
         const url = (document.getElementById('updateManifestUrl') || {}).value || '';
         saveUpdateConfig();
@@ -5055,11 +5061,15 @@ id="externalLink">🔗 打开查询工具</a>
             afterVersionCheck();
             return;
         }
+        checkUpdateInFlight = true;
+        // 兜底：极端情况下 Python 回调若未能回到前端，30 秒后也自动解锁，避免按钮永久失效
+        clearTimeout(checkUpdateUnlockTimer);
+        checkUpdateUnlockTimer = setTimeout(function () { checkUpdateInFlight = false; }, 30000);
         if (status) status.textContent = '正在检查版本与游戏数据…';
         setTopStatus('正在后台检查版本与游戏数据…');
         setTopDataStatus('📦 将在版本检查后一并检查游戏数据…');
         if (pythonAPI) pythonAPI.checkUpdate(source);
-        else afterVersionCheck();
+        else { checkUpdateInFlight = false; afterVersionCheck(); }
     }
 
     // 版本检查结束（无论有没有新版本）→ 再检查数据包新增
@@ -5070,6 +5080,8 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     function onUpdateChecked(result) {
+        checkUpdateInFlight = false;   // 一轮检查已回结果（无论成功/失败/旧版本），允许再次检查
+        clearTimeout(checkUpdateUnlockTimer);
         const status = document.getElementById('updateStatus');
         const setStatus = function (txt, color, title) {
             if (!status) return;
@@ -5090,10 +5102,13 @@ id="externalLink">🔗 打开查询工具</a>
             } catch (e) {}
         }
         if (result && result.status === 'stale') {
-            // 线上版本比本机还旧 → 一定是读错了地址或命中旧缓存，不能淡定地说「已是最新」
-            setStatus('⚠️ ' + (result.message || '读到的线上版本比本机旧'), '#a8622f',
-                      '线上 V' + (result.latest || '?') + ' · 本机 V' + APP_VERSION);
-            setTopStatus('⚠️ 读到的线上版本比本机旧，点「检查更新」查看详情', '#a8622f');
+            // 线上清单读到比本机还旧的版本，绝大多数是刚发版时 CDN 还没刷新（raw/镜像缓存了旧文件），
+            // 本机既然已是更高的版本，就无需让用户做任何事。降级为温和说明，不再弹黄色警告、
+            // 更不该让人去「恢复默认更新地址」——地址往往根本没错。
+            const seen = result.latest || '?';
+            const tip = '已是最新版本 V' + APP_VERSION + '（线上清单读到旧版本 V' + seen + '，多半是刚更新还没刷新，无需处理）';
+            setStatus(tip, '#5a7a4a', '线上读到 V' + seen + ' · 本机 V' + APP_VERSION);
+            if (!updateInFlight) setTopStatus(tip);
             afterVersionCheck();
             return;
         }
