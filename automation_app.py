@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -1645,15 +1645,30 @@ id="externalLink">🔗 打开查询工具</a>
         if(statSpan) statSpan.innerText = `✨奇遇:${wonderCount}  🍃非奇遇:${normalCount}`;
     }
 
+    // 按「系统当前日期 + 赛季起止日期」算出当前赛季 id：
+    // 今天落在哪个赛季区间就是哪个；没有区间覆盖时取「已开始」里开始日期最晚的；
+    // 都没有再按 order 最大的兜底。与 getCurrentSeasonInfo() 的判断保持一致。
     function getCurrentSeasonId() {
-        const now = new Date();
-        const today = now.toISOString().slice(0,10);
-        for (let s of seasons) {
-            if (s.startDate && s.endDate) {
-                if (today >= s.startDate && today <= s.endDate) return s.id;
-            }
+        if (!seasons || !seasons.length) return null;
+        const info = getCurrentSeasonInfo();
+        if (info && info.season && info.season.id !== undefined && info.season.id !== null) {
+            return info.season.id;
         }
         return null;
+    }
+
+    // 按系统日期把 currentSeasonId 重算到当前赛季并落盘。返回是否真的换了赛季。
+    // 软件启动、同步进新赛季数据后都会调用，保证「当前赛季」始终跟系统日期走。
+    function recheckCurrentSeasonByDate() {
+        let autoId = getCurrentSeasonId();
+        if (autoId === null && seasons.length > 0) autoId = seasons[0].id;
+        if (autoId === null) return false;
+        const changed = currentSeasonId !== autoId;
+        currentSeasonId = autoId;
+        localStorage.setItem('setting_current_season', String(autoId));
+        const sel = document.getElementById('settingCurrentSeason');
+        if (sel) sel.value = String(autoId);
+        return changed;
     }
 
     function loadData() {
@@ -1717,12 +1732,10 @@ id="externalLink">🔗 打开查询工具</a>
         refreshIdSequences();
         setSettingsUI();
         populateSeasonDropdown();
-        if (currentSeasonId === null || !seasons.some(s => s.id === currentSeasonId)) {
-            const autoId = getCurrentSeasonId();
-            if (autoId !== null) currentSeasonId = autoId;
-            else if (seasons.length > 0) currentSeasonId = seasons[0].id;
-            localStorage.setItem('setting_current_season', String(currentSeasonId));
-        }
+        // V1.4.6 起：每次打开软件都按「系统当前日期 + 赛季起止日期」自动校验当前赛季，
+        // 不再沿用上次手动选的值。日期一跨进新赛季区间，当前赛季 / 剩余天数 / 新精灵默认归属
+        // 就都会跟着切到新赛季；手动在设置页选的赛季只在本次运行内有效，下次打开按日期重算。
+        recheckCurrentSeasonByDate();
         const sel = document.getElementById("settingCurrentSeason");
         if (sel) sel.value = currentSeasonId !== null ? String(currentSeasonId) : "";
         if (activeTargetId !== null) {
@@ -4925,6 +4938,9 @@ id="externalLink">🔗 打开查询工具</a>
         persistAll();
         refreshIdSequences();
         populateSeasonDropdown();
+        // V1.4.6：同步进新赛季后立刻按系统日期重算当前赛季，
+        // 不必等下次打开软件才切到新赛季。
+        recheckCurrentSeasonByDate();
         fullRender();
         loadDataConfig();
         closeDataSyncDialog();

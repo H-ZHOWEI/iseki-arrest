@@ -1,9 +1,9 @@
 {
-  "version": "1.4.5",
+  "version": "1.4.6",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.4.5：修复连点几次「检查更新」误弹「读到的线上版本比本机旧」黄色警告——加防连点锁（一轮检查没回来前忽略重复点击），并把旧版本提示降级为温和的「已是最新版本（线上清单读到旧版本，刚更新还没刷新，无需处理）」，本机已是最新时不再误导用户改地址。详见 CHANGELOG.md 与 操作指引.md。",
+  "notes": "v1.4.6：当前赛季改为每次打开软件都按赛季起止日期 + 系统当前日期自动校验切换，不再停在旧赛季（如到了 11-23 自动切到 S5 圣龙宝藏）；同步进新赛季数据后也立即切换；修正凌晨 UTC 日期差一天的问题。详见 CHANGELOG.md 与 操作指引.md。",
   "mandatory": false,
-  "sha256": "224ea7054f58e8b37cb6678bc02464cbb527625ac6c30eee7ecf2518688b52b4",
+  "sha256": "9778a30f5847051683e4537dee3164f9ebc1e5b7f4af03bcc12a6d75118574f9",
   "pub_date": "2026-11-23",
-  "size": 87301914
+  "size": 87302757
 }
