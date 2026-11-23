@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -78,7 +78,9 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         }
         body {
             background: #eef2e6;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, sans-serif;
+            /* 显式把彩色 emoji 字体排在后面：避免界面里的 🎯✨📜 被系统单色符号字体接管 */
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica,
+                'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
             margin: 0;
             padding: 0 0 80px 0;
             color: #1e2f1c;
@@ -89,13 +91,15 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             padding: 16px 12px;
             position: relative;
         }
+        /* 固定工具栏统一用不透明白底：
+           原来的 backdrop-filter: blur() 会把整条栏变成合成层，滚动或半像素定位时
+           栏里的文字会被重采样成糊字（侧边栏「有的页面清晰有的页面模糊」也是同一类原因）。 */
         .bottom-nav {
             position: fixed;
             bottom: 0;
             left: 0;
             right: 0;
-            background: rgba(255, 255, 255, 0.96);
-            backdrop-filter: blur(12px);
+            background: #ffffff;
             display: flex;
             justify-content: space-around;
             padding: 8px 16px 12px;
@@ -123,8 +127,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             position: sticky;
             top: 0;
             z-index: 300;
-            background: rgba(255, 255, 255, 0.97);
-            backdrop-filter: blur(12px);
+            background: #ffffff;
             border: 1px solid #d9e3cf;
             border-top: none;
             border-radius: 0 0 18px 18px;
@@ -199,14 +202,16 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             margin-bottom: 16px;
             gap: 8px;
         }
+        /* 标题：不要用 background-clip:text 做渐变字！
+           那样会把标题里的彩色 emoji（🎯✨📜…）也当成文字填成纯色剪影，
+           表现为「图标变成一坨深色方块、选中后才恢复正常」。
+           这里改用实色绿，emoji 保持原生彩色。 */
         .card-header h2 {
             margin: 0;
             font-size: 1.35rem;
             font-weight: 700;
-            background: linear-gradient(135deg, #2b6e2f, #4c9e2c);
-            background-clip: text;
-            -webkit-background-clip: text;
-            color: transparent;
+            color: #2b6e2f;
+            font-family: inherit;
         }
         .card-header .header-actions {
             display: flex;
@@ -476,10 +481,13 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             overflow-y: auto;
         }
         .app-toast {
+            /* 同样避开 translateX(-50%) 的半像素：用左右定位 + margin auto 居中，文字更锐利 */
             position: fixed;
-            left: 50%;
+            left: 0;
+            right: 0;
+            margin: 0 auto;
+            width: max-content;
             bottom: 32px;
-            transform: translateX(-50%);
             background: #2f4a24;
             color: #fff;
             padding: 11px 20px;
@@ -593,9 +601,32 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         .season-content.collapsed {
             display: none;
         }
+        /* 赛季筛选下拉框：给足高度、左右留白，避免圆角/滚动条把文字裁掉一截。
+           （max-height + overflow-y 加在 select 上在 Chromium 里会把选项文字挤掉） */
         .season-select {
-            max-height: 200px;
-            overflow-y: auto;
+            max-height: none;
+            overflow: visible;
+            height: 34px;
+            line-height: 1.2;
+            padding: 0 34px 0 14px;
+            text-overflow: ellipsis;
+        }
+        .filter-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .filter-row > label {
+            flex: none;
+            white-space: nowrap;
+            font-size: 0.85rem;
+            color: #2b4a2b;
+        }
+        .filter-row > input,
+        .filter-row > select {
+            flex: 1;
+            min-width: 0;
         }
         .import-export-buttons {
             display: flex;
@@ -707,15 +738,22 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             font-size: 0.65rem;
             padding: 2px 8px;
         }
-        /* 侧边栏样式 - 调大 */
+        /* 侧边栏样式 - 调大
+           模糊的根因有两个，都在这儿处理掉：
+           1) top:50% + translateY(-50%)：每页条目数不同 → 高度奇偶不同 → 垂直位置落在 .5 像素上，
+              固定层里的文字被重采样就发虚（有的页面刚好是整数像素才清晰）。改成 JS 对齐到整数设备像素。
+           2) 半透明 + backdrop-filter：整块被提升成合成层再做模糊背景，文字跟着糊。改成实色底。
+           另外字号用整数 px（0.8rem=12.8px 是小数）、去掉 0.3px 字距，字形原点才不会被挤到半像素上。 */
         .tab-sidebar {
             position: fixed;
             right: 12px;
-            top: 50%;
-            transform: translateY(-50%);
+            top: 0;
+            bottom: 0;
+            margin-top: auto;
+            margin-bottom: auto;
+            height: max-content;
             z-index: 90;
-            background: rgba(255,255,255,0.92);
-            backdrop-filter: blur(10px);
+            background: #fbfdf8;
             border-radius: 30px;
             padding: 12px 8px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.1);
@@ -723,14 +761,14 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             gap: 8px;
-            max-height: 70vh;
+            max-height: 74vh;
             overflow-y: auto;
         }
         .tab-sidebar a {
             display: block;
             padding: 6px 14px;
             border-radius: 24px;
-            font-size: 0.8rem;
+            font-size: 13px;
             color: #5a7a4a;
             text-decoration: none;
             text-align: center;
@@ -739,7 +777,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             transition: 0.15s;
             cursor: pointer;
             line-height: 1.4;
-            letter-spacing: 0.3px;
+            letter-spacing: 0;
         }
         .tab-sidebar a:hover {
             background: #4c9e2c20;
@@ -749,36 +787,6 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             background: #4c9e2c;
             color: white;
         }
-        .link-card {
-            background: linear-gradient(135deg, #e8f5e9, #c8e6c9);
-            border-radius: 28px;
-            padding: 18px 16px;
-            margin-bottom: 20px;
-            border: 1px solid #a5d6a7;
-            text-align: center;
-        }
-        .link-card a {
-            display: inline-block;
-            background: #2b6e2f;
-            color: white;
-            padding: 12px 28px;
-            border-radius: 40px;
-            text-decoration: none;
-            font-weight: 700;
-            font-size: 1.1rem;
-            box-shadow: 0 4px 8px rgba(43,110,47,0.3);
-            transition: 0.2s;
-            cursor: pointer;
-        }
-        .link-card a:hover {
-            background: #1e4f21;
-            transform: scale(1.02);
-        }
-        .link-card .sub {
-            margin-top: 8px;
-            font-size: 0.75rem;
-            color: #3d7a24;
-        }
         /* 侧边栏适配小屏 */
         @media (max-width: 480px) {
             .tab-sidebar {
@@ -786,7 +794,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                 padding: 8px 4px;
             }
             .tab-sidebar a {
-                font-size: 0.7rem;
+                font-size: 12px;
                 padding: 4px 10px;
             }
         }
@@ -907,14 +915,6 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             <div id="categoryNotesContainer" style="margin-top: -10px; margin-bottom: 16px;"></div>
         </div>
 
-        <!-- 超链接卡片 -->
-        <div class="link-card" id="link-card">
-            <div style="font-size:1.2rem; font-weight:700; margin-bottom:6px;">🎯 前往异色捕捉查询</div>
-            <a href="https://qize-roco-d4gmue7dt620963b7-1455001032.tcloudbaseapp.com/s3-mix/"
-id="externalLink">🔗 打开查询工具</a>
-            <div class="sub">点击在新窗口打开，快速查询异色精灵捕捉信息</div>
-        </div>
-
         <div class="total-gap-panel" id="card-total-gap">
             <div style="font-weight: 700; margin-bottom: 8px;">📊 动态总缺口分析 (优先消耗库存多的球)</div>
             <div id="totalGapContent">计算中...</div>
@@ -926,7 +926,7 @@ id="externalLink">🔗 打开查询工具</a>
             <div class="card-header">
                 <h2>🎯 当前捕捉目标</h2>
                 <div class="header-actions">
-                    <button id="clearTargetBtn" class="small danger">✖️ 取消目标</button>
+                    <button id="clearTargetBtn" class="small danger" style="display:none;">✖️ 取消目标</button>
                 </div>
             </div>
             <div id="activeTargetSelector" style="margin-bottom: 8px;">
@@ -992,13 +992,13 @@ id="externalLink">🔗 打开查询工具</a>
                     <button id="addCapturedRecordBtn" class="small primary">➕ 新增</button>
                 </div>
             </div>
-            <div class="flex-between" style="margin-bottom: 8px;">
+            <div class="filter-row">
                 <label>🏆 赛季筛选：</label>
-                <select id="seasonFilterSelect" class="season-select" style="flex:2; max-height: 200px; overflow-y: auto;"></select>
+                <select id="seasonFilterSelect" class="season-select"></select>
             </div>
-            <div class="flex-between" style="margin-bottom: 12px;">
+            <div class="filter-row">
                 <label>🔍 搜索精灵：</label>
-                <input type="text" id="capturedSearchInput" placeholder="输入精灵名筛选" style="flex:2;" autocomplete="off">
+                <input type="text" id="capturedSearchInput" placeholder="输入精灵名筛选" autocomplete="off">
             </div>
             <div id="avgStatsContainer" class="avg-stats">加载中...</div>
             <div id="capturedListContainer">暂无记录</div>
@@ -1786,7 +1786,11 @@ id="externalLink">🔗 打开查询工具</a>
         let orderLock = localStorage.getItem(STORAGE.ORDERLOCK); if(orderLock) orderLocked = JSON.parse(orderLock); else orderLocked = false;
         let lockedOrd = localStorage.getItem(STORAGE.LOCKEDORDER); if(lockedOrd) lockedOrderIds = JSON.parse(lockedOrd); else lockedOrderIds = [];
         let custom = localStorage.getItem(STORAGE.CUSTOMSTART); if(custom) customStartId = JSON.parse(custom); else customStartId = null;
-        let active = localStorage.getItem(STORAGE.ACTIVETARGET); if(active) activeTargetId = parseInt(active); else activeTargetId = null;
+        // 注意：取消目标时存的是字符串 "null"，parseInt 会得到 NaN，必须归一成真正的 null，
+        // 否则会出现「没选目标但界面以为有目标」的脏状态。
+        let active = localStorage.getItem(STORAGE.ACTIVETARGET);
+        let activeParsed = active ? parseInt(active) : NaN;
+        activeTargetId = Number.isFinite(activeParsed) ? activeParsed : null;
 
         let rb = localStorage.getItem('setting_round_balls'); if(rb) settingRoundBalls = parseInt(rb) || 240;
         let pp = localStorage.getItem('setting_people'); if(pp) settingPeople = parseInt(pp) || 2;
@@ -1842,10 +1846,6 @@ id="externalLink">🔗 打开查询工具</a>
         }
         // 初始化侧边栏
         initSidebar();
-        // 修复超链接点击
-        document.getElementById('externalLink')?.addEventListener('click', function(e) {
-            e.stopPropagation();
-        });
 
         // 加载成长计划数据
         loadGrowthData();
@@ -1895,7 +1895,7 @@ id="externalLink">🔗 打开查询工具</a>
         localStorage.setItem(STORAGE.ORDERLOCK, JSON.stringify(orderLocked));
         localStorage.setItem(STORAGE.LOCKEDORDER, JSON.stringify(lockedOrderIds));
         localStorage.setItem(STORAGE.CUSTOMSTART, JSON.stringify(customStartId));
-        localStorage.setItem(STORAGE.ACTIVETARGET, JSON.stringify(activeTargetId));
+        localStorage.setItem(STORAGE.ACTIVETARGET, activeTargetId === null ? '' : JSON.stringify(activeTargetId));
         localStorage.setItem('setting_round_balls', String(settingRoundBalls));
         localStorage.setItem('setting_people', String(settingPeople));
         localStorage.setItem('setting_balls_per_spirit', String(settingBallsPerSpirit));
@@ -4000,7 +4000,26 @@ id="externalLink">🔗 打开查询工具</a>
     function updateTargetSelector(){ let sel=document.getElementById("selectTargetSpirit"); if(!sel)return; let displaySpirits = getFilteredSpiritsForDisplay(); sel.innerHTML='<option value="">-- 选择捕捉目标 --</option>'; displaySpirits.forEach(sp=>{ sel.innerHTML+=`<option value="${sp.id}" ${activeTargetId===sp.id?'selected':''}>${sp.name}</option>`; }); }
     function setActiveTarget(){ let sel=document.getElementById("selectTargetSpirit"); let val=parseInt(sel.value); if(!isNaN(val) && spirits.some(s=>s.id===val)) { activeTargetId=val; } else { activeTargetId=null; } persistAll(); fullRender(); }
     function clearActiveTarget(){ if(confirm("确定取消当前捕捉目标吗？")) { activeTargetId=null; persistAll(); fullRender(); } }
-    function renderTargetHighlight(){ let cont=document.getElementById("targetHighlightInfo"); if(!cont)return; if(activeTargetId){ let sp=spirits.find(s=>s.id===activeTargetId); if(sp){ let matched=ballTypes.filter(b=>isAttributeBall(b) && (sp.attrs || []).some(sa=> [b.attr1, b.attr2].filter(a=>a && a.trim() && a !== "无").includes(sa))).map(b=>b.name).join(" → "); cont.innerHTML=`<strong>当前目标: ${sp.name}</strong><br>🎯 优先使用: ${matched || "无匹配属性球"}<br>（背包中对应属性球已高亮）`; } else cont.innerHTML=""; } else cont.innerHTML="请在上方选择捕捉目标"; }
+    function renderTargetHighlight(){
+        let cont = document.getElementById("targetHighlightInfo");
+        let clearBtn = document.getElementById("clearTargetBtn");
+        let sel = document.getElementById("selectTargetSpirit");
+        let h2 = document.querySelector("#card-target .card-header h2");
+        let activeSp = activeTargetId ? spirits.find(s => s.id === activeTargetId) : null;
+        // 「取消目标」只在真的有目标时才出现，没选目标时完全不占位置
+        if (clearBtn) clearBtn.style.display = activeSp ? "" : "none";
+        if (h2) h2.textContent = activeSp ? "🎯 当前捕捉目标" : "🎯 捕捉目标";
+        if (cont) {
+            if (activeSp) {
+                let matched = ballTypes.filter(b => isAttributeBall(b) && (activeSp.attrs || []).some(sa => [b.attr1, b.attr2].filter(a => a && a.trim() && a !== "无").includes(sa))).map(b => b.name).join(" → ");
+                cont.innerHTML = `<strong>当前目标: ${escapeHtml(activeSp.name)}</strong><br>🎯 优先使用: ${matched || "无匹配属性球"}<br>（背包中对应属性球已高亮）`;
+            } else {
+                cont.innerHTML = "请在上方选择捕捉目标";
+            }
+        }
+        // 目标已生效时，下拉框直接显示该目标，用户一眼能确认当前锁定了谁
+        if (sel && activeSp) sel.value = String(activeSp.id);
+    }
 
     function syncBallsPerSpirit(newValue) {
         if (isNaN(newValue) || newValue < 1) return;
@@ -4161,6 +4180,21 @@ id="externalLink">🔗 打开查询工具</a>
         return String(el.id || '').replace(/^card-/, '') || '板块';
     }
 
+    // 侧边栏垂直居中对齐到「整数设备像素」：
+    // 固定层的顶端只要落在 .5 像素上（条目数不同高度奇偶不同就会出现），整块文字就发虚。
+    function snapSidebarPosition() {
+        const dpr = window.devicePixelRatio || 1;
+        const sb = document.querySelector('.tab-content.active-tab > .tab-sidebar');
+        if (!sb) return;
+        const h = sb.getBoundingClientRect().height;
+        const raw = (window.innerHeight - h) / 2;
+        const snapped = Math.round(raw * dpr) / dpr;
+        sb.style.top = snapped + 'px';
+        sb.style.bottom = 'auto';
+        sb.style.marginTop = '0';
+        sb.style.marginBottom = '0';
+    }
+
     function initSidebar() {
         document.querySelectorAll('.tab-content').forEach(tabContent => {
             const oldSidebar = tabContent.querySelector(':scope > .tab-sidebar');
@@ -4202,6 +4236,15 @@ id="externalLink">🔗 打开查询工具</a>
             });
             tabContent.appendChild(sidebar);
         });
+        requestAnimationFrame(snapSidebarPosition);
+    }
+
+    if (!window.__sidebarSnapBound) {
+        window.__sidebarSnapBound = true;
+        window.addEventListener('resize', () => requestAnimationFrame(snapSidebarPosition));
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(() => requestAnimationFrame(snapSidebarPosition));
+        }
     }
 
     // ===== 切换 Tab 记住滚动位置 =====
@@ -4225,6 +4268,7 @@ id="externalLink">🔗 打开查询工具</a>
                     } else {
                         window.scrollTo(0, 0);
                     }
+                    snapSidebarPosition();
                 });
             });
         });
