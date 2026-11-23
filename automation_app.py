@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -1954,7 +1954,10 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         seasons.forEach(s => {
             const opt = document.createElement('option');
             opt.value = s.id;
-            opt.textContent = s.name + (s.startDate && s.endDate ? ` (${s.startDate} ~ ${s.endDate})` : '');
+            // 只放赛季名：带日期区间的话在设置页半宽下拉框里会被横向截断（看不到后半截）。
+            // 日期放进 title，鼠标悬停或展开列表时仍能看到；上方「赛季管理」也列着起止日期。
+            opt.textContent = s.name;
+            if (s.startDate && s.endDate) opt.title = `${s.name} (${s.startDate} ~ ${s.endDate})`;
             sel.appendChild(opt);
         });
         if (currentSeasonId !== null && seasons.some(s => s.id === currentSeasonId)) {
