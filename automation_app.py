@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.6.0"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -373,6 +373,17 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             color: #5a7a4a;
             margin: 4px 0;
         }
+        .ball-season-tag {
+            display: inline-block;
+            background: #fff2d0;
+            border: 1px solid #f0d79a;
+            color: #96690f;
+            border-radius: 10px;
+            padding: 0 7px;
+            font-size: 0.62rem;
+            line-height: 1.6;
+            margin-bottom: 2px;
+        }
         .ball-stock {
             font-size: 0.75rem;
             background: #eef2e4;
@@ -457,7 +468,21 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             border: 1px solid #cbdcc0;
             border-radius: 24px;
             padding: 8px 12px;
-            font-size: 0.85rem;
+            /* 字号用整数 px：0.85rem = 13.6px 是小数，QtWebEngine(Qt5.15/Chrome83)
+               会把原生下拉框的内部文字框算成半像素，表现就是「字被切掉底部一截」。 */
+            font-size: 13px;
+            font-family: inherit;
+            color: #1e2f1c;
+        }
+        /* 原生下拉框单独定死高度与内边距：
+           以前只靠 padding 撑高，箭头 + 小数行高叠加时文字会贴着上沿并被裁。
+           固定 34px 高、上下各留 8px 左右的呼吸空间，右侧给原生箭头留位。 */
+        select {
+            height: 34px;
+            padding: 0 28px 0 14px;
+            line-height: 1.2;
+            vertical-align: middle;
+            cursor: pointer;
         }
         .modal {
             position: fixed;
@@ -520,8 +545,16 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         }
         textarea {
             width: 100%;
-            font-size: 0.7rem;
-            font-family: monospace;
+            /* 整数字号 + 明确的内边距/行高，避免粘贴框里的字糊在一起或被切 */
+            font-size: 12px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            line-height: 1.5;
+            color: #1e2f1c;
+            background: #ffffff;
+            border: 1px solid #cbdcc0;
+            border-radius: 14px;
+            padding: 8px 10px;
+            resize: vertical;
         }
         .log-detail {
             margin-top: 6px;
@@ -1064,6 +1097,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             </div>
             <div class="badge" style="margin-top:8px;">💡 点击球种可修改库存。捕捉进行中时修改库存会同步更新快照，影响后续消耗计算。</div>
             <div class="badge" style="margin-top:4px;">💡 点击 ↑/↓ 可调整球种顺序，顺序会同步到所有下拉列表。</div>
+            <div class="badge" style="margin-top:4px;">🌞 带「赛季球」标记的球会跟着数据包一起发布给其他玩家（只发名字 / 属性 / 标记，<b>库存不会上传</b>）。</div>
         </div>
 
         <div class="card" id="card-battle">
@@ -1155,7 +1189,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             </div>
 
             <div style="border-top:1px dashed #cfe0bf; margin-top:14px; padding-top:12px;">
-                <label style="font-weight:600;" id="gameDataLabel">📦 游戏数据（预设精灵库 / 赛季）</label>
+                <label style="font-weight:600;" id="gameDataLabel">📦 游戏数据（赛季 / 预设精灵库 / 咕噜球球种 / 成长计划设置）</label>
                 <div style="margin-top:8px;">
                     <label>数据包直链（留空用默认；国内网络拉不动时可在地址前加 https://ghproxy.net/ 走加速，不要用 jsDelivr——它会缓存旧内容）</label>
                     <input type="text" id="updateDataUrl" class="search-box" style="width:100%;" placeholder="https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json">
@@ -1179,16 +1213,17 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                         <span id="publishStatus" style="font-size:0.75rem; color:#5a7a4a;"></span>
                     </div>
                     <div style="font-size:0.7rem; color:#7d9870; margin-top:6px; line-height:1.5;">
-                        上传会直接提交到仓库 <b>data/game_data.json</b>（分支 main），用户下次检查更新即可收到新赛季。<br>
-                        注意：<b>只有「新赛季」及其中的精灵会被推送给用户</b>，给老赛季补精灵不会生效。
+                        上传会直接提交到仓库 <b>data/game_data.json</b>（分支 main），用户下次检查更新即可收到新赛季、新球种。<br>
+                        数据包内容：<b>赛季、预设精灵库、咕噜球球种（名字 / 属性 / 是否赛季球，不含库存）、成长计划设置</b>。<br>
+                        注意：<b>只有「新赛季」及其中的精灵、本地缺的球种、新的成长计划设置会被推送给用户</b>，给老赛季补精灵、改已有球种不会生效。
                     </div>
                 </div>
                 <div class="badge" style="margin-top:8px;">
                     💡 数据版本：<b><span id="dataVersionLabel">未同步</span></b>　来源：<span id="dataPackUrlLabel" style="word-break:break-all;">-</span><br>
                     每次打开软件都会<b>在后台自动检查一次</b>版本（顶部抬头会显示结果），发现新版直接在抬头提示，不弹窗挡操作；也可以点顶部或下方的「检查更新」手动查。点「检查更新」时<b>先查软件版本，再查有没有新赛季</b>；也可单独点「检查数据更新」。<br>
                     主地址（GitHub raw）拉不动时会<b>自动换 github.com 直链 / ghproxy 系列镜像</b>重试，也可点「测试地址」逐条探测；<b>V1.3.12 起已移除 jsDelivr</b>（它会把清单缓存成 12 小时前的旧内容，导致漏报新版本）。<br>
-                    发现新赛季时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只加新赛季及其中的精灵</b>——<b>已有赛季不参与比对</b>，你原有的赛季、精灵（包括你改过的和手动新增的）一律不动、不删。<br>
-                    发布新数据：在本机把赛季和预设精灵维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新赛季提示。<br>
+                    发现新数据时会<b>弹窗列出清单，由你决定是否更新进来</b>；合并规则：<b>只加新赛季及其中的精灵、只补本地没有的球种</b>——<b>已有的赛季 / 精灵 / 球种都不参与比对</b>，你原有的记录、球种属性与库存一律不动、不删；成长计划设置可以在弹窗里选择是否一起同步。<br>
+                    发布新数据：在本机把赛季、预设精灵库、咕噜球球种（可标记「赛季球」）和成长计划设置维护好 → 点「导出数据包（发布用）」存成 <b>game_data.json</b> → 覆盖仓库 <b>data/game_data.json</b> 并提交，用户下次检查更新就会收到新内容。<br>
                     <span style="color:#8a9a80;">提示：用户只会收到「新赛季」及其精灵，所以给老赛季补精灵不会推送给别人。</span>
                 </div>
             </div>
@@ -1773,6 +1808,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         window.scrollPositions = {};
 
         let sb = localStorage.getItem(STORAGE.BALLS); if(sb) { ballTypes = JSON.parse(sb); } else ballTypes = getDefaultBalls();
+        // V1.6.0：球种新增「赛季球」标记，老数据补字段
+        ballTypes.forEach(function (b) { if (!b) return; if (b.isSeason === undefined || b.isSeason === null) b.isSeason = false; else b.isSeason = !!b.isSeason; });
         let si = localStorage.getItem(STORAGE.INVENTORY); if(si) inventory = JSON.parse(si); else inventory = {};
         let sp = localStorage.getItem(STORAGE.PRESET); if(sp) { presetSpirits = JSON.parse(sp); } else presetSpirits = getDefaultPreset();
         let st = localStorage.getItem(STORAGE.SPIRITS); if(st) spirits = JSON.parse(st); else spirits = [];
@@ -3263,24 +3300,69 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         }
     }
 
-    function openBallEditDialog(ballId) {
-        const ball = ballTypes.find(b=>b.id===ballId); if(!ball) return;
+    // 球种新增 / 编辑共用一套弹窗（V1.6.0：多了「赛季球」标记）
+    function openBallEditDialog(ballId) { showBallDialog(ballId); }
+    function openBallAddDialog() { showBallDialog(null); }
+    function showBallDialog(ballId) {
+        const isEdit = (ballId !== null && ballId !== undefined);
+        const ball = isEdit ? ballTypes.find(b => b.id === ballId) : null;
+        if (isEdit && !ball) return;
         const allAttrs = getAllAttributes();
-        const modal=document.createElement('div'); modal.className='modal';
-        modal.innerHTML=`<div class="modal-content"><h3>编辑球种</h3><div><label>名称</label><input id="editBallName" value="${escapeHtml(ball.name)}"></div><div><label>属性1</label><select id="editAttr1"><option value="">无</option>${allAttrs.map(a=>`<option value="${a}" ${ball.attr1===a?'selected':''}>${a}</option>`).join('')}</select></div><div><label>属性2</label><select id="editAttr2"><option value="">无</option>${allAttrs.map(a=>`<option value="${a}" ${ball.attr2===a?'selected':''}>${a}</option>`).join('')}</select></div><div><label>库存</label><input id="editStock" type="number" value="${inventory[ball.id]||0}" min="0"></div><div style="display:flex; gap:8px; margin-top:16px;"><button id="saveBallEdit">保存</button><button id="cancelModal">取消</button></div></div>`;
+        const cur = ball || { name: '', attr1: '', attr2: '', isSeason: false };
+        const stockVal = ball ? (inventory[ball.id] || 0) : 0;
+        const attrOpts = sel => '<option value="">无</option>' + allAttrs.map(a =>
+            `<option value="${a}" ${sel === a ? 'selected' : ''}>${a}</option>`).join('');
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.innerHTML = `<div class="modal-content" style="max-width:340px;">
+            <h3 style="margin-top:0;">${isEdit ? '编辑球种' : '添加球种'}</h3>
+            <div><label>名称</label><input id="ballNameInput" value="${escapeHtml(cur.name)}" placeholder="例如：光合球"></div>
+            <div style="display:flex; gap:8px;">
+                <div style="flex:1;"><label>属性 1</label><select id="ballAttr1" style="width:100%;">${attrOpts(cur.attr1)}</select></div>
+                <div style="flex:1;"><label>属性 2</label><select id="ballAttr2" style="width:100%;">${attrOpts(cur.attr2)}</select></div>
+            </div>
+            <div><label>库存数量</label><input id="ballStockInput" type="number" min="0" value="${stockVal}"></div>
+            <label style="display:flex; align-items:center; gap:8px; margin-top:10px; padding:8px 10px; background:#f4f8ef; border-radius:12px; font-size:0.78rem; color:#2b4a2b; cursor:pointer;">
+                <input type="checkbox" id="ballSeasonInput" style="width:16px; height:16px; margin:0;" ${cur.isSeason ? 'checked' : ''}>
+                <span>🌞 赛季球<span style="color:#7d9870; font-size:0.7rem;">（本赛季专门用来抓异色的球）</span></span>
+            </label>
+            <div style="display:flex; gap:8px; margin-top:16px;">
+                <button id="ballSaveBtn" class="primary">保存</button>
+                <button id="ballCancelBtn">取消</button>
+            </div>
+        </div>`;
         document.body.appendChild(modal);
-        modal.querySelector('#saveBallEdit').onclick=function() {
+        modal.querySelector('#ballSaveBtn').onclick = function () {
             try {
-                let newName = modal.querySelector('#editBallName').value.trim()||ball.name;
-                let newAttr1 = modal.querySelector('#editAttr1').value;
-                let newAttr2 = modal.querySelector('#editAttr2').value;
-                if(newAttr1 === "无" || newAttr1 === "") newAttr1 = "";
-                if(newAttr2 === "无" || newAttr2 === "") newAttr2 = "";
-                let newStock = parseInt(modal.querySelector('#editStock').value);
-                if(isNaN(newStock)||newStock<0) newStock=0;
-                let stockChanged = (newStock !== (inventory[ball.id]||0));
-                if(captureSnapshot && stockChanged) {
-                    if(confirm(`库存已修改，是否将当前库存同步为新的快照？这将影响后续捕捉消耗计算。`)) {
+                let newName = (modal.querySelector('#ballNameInput').value || '').trim();
+                let newAttr1 = modal.querySelector('#ballAttr1').value;
+                let newAttr2 = modal.querySelector('#ballAttr2').value;
+                if (newAttr1 === '无') newAttr1 = '';
+                if (newAttr2 === '无') newAttr2 = '';
+                let newStock = parseInt(modal.querySelector('#ballStockInput').value);
+                if (isNaN(newStock) || newStock < 0) newStock = 0;
+                const newSeason = !!modal.querySelector('#ballSeasonInput').checked;
+
+                if (!isEdit) {
+                    if (!newName) { showToast('请填写球种名称', true); return; }
+                    if (ballTypes.some(b => String(b.name).trim() === newName)) {
+                        showToast('已有同名球种：' + newName, true); return;
+                    }
+                    const nid = nextBallId++;
+                    ballTypes.push({ id: nid, name: newName, attr1: newAttr1, attr2: newAttr2, isSeason: newSeason });
+                    inventory[nid] = newStock;
+                    persistAll(); fullRender();
+                    showToast('已添加球种：' + newName);
+                    return;
+                }
+
+                newName = newName || ball.name;
+                if (newName !== ball.name && ballTypes.some(b => b.id !== ball.id && String(b.name).trim() === newName)) {
+                    showToast('已有同名球种：' + newName, true); return;
+                }
+                const stockChanged = (newStock !== (inventory[ball.id] || 0));
+                if (captureSnapshot && stockChanged) {
+                    if (confirm('库存已修改，是否将当前库存同步为新的快照？这将影响后续捕捉消耗计算。')) {
                         lastCaptureStock = { ...inventory };
                         lastCaptureStock[ball.id] = newStock;
                     }
@@ -3288,6 +3370,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                 ball.name = newName;
                 ball.attr1 = newAttr1;
                 ball.attr2 = newAttr2;
+                ball.isSeason = newSeason;
                 inventory[ball.id] = newStock;
                 persistAll();
                 fullRender();
@@ -3295,9 +3378,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                 modal.remove();
             }
         };
-        modal.querySelector('#cancelModal').onclick=function() {
-            modal.remove();
-        };
+        modal.querySelector('#ballCancelBtn').onclick = function () { modal.remove(); };
     }
 
     function moveBallUp(index) {
@@ -3470,10 +3551,14 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         ballTypes.forEach((ball, index) => {
             let attrText = getBallAttrDisplay(ball);
             let stock = inventory[ball.id]||0;
+            let seasonTag = ball.isSeason
+                ? '<span class="ball-season-tag">🌞 赛季球</span>'
+                : '';
             html += `<div class="ball-card" data-ball-id="${ball.id}">
                         <div class="ball-name">${escapeHtml(ball.name)}</div>
                         <div class="ball-attrs">${attrText}</div>
                         <div class="ball-stock">📦 ${stock}</div>
+                        ${seasonTag}
                         <div class="move-buttons">
                             <button class="ball-move-up" data-index="${index}" title="上移">↑</button>
                             <button class="ball-move-down" data-index="${index}" title="下移">↓</button>
@@ -4436,7 +4521,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         });
         // G 升级：批量从预设库添加待捕捉精灵
         document.getElementById("batchAddSpiritBtn")?.addEventListener("click", showBatchAddSpiritsDialog);
-        document.getElementById("addBallTypeBtn")?.addEventListener("click",()=>{ let name=prompt("球种名"); if(!name)return; let a1=prompt("属性1","草"); if(!a1)a1="草"; let a2=prompt("属性2(可选)",""); let nid=nextBallId++; ballTypes.push({id:nid,name,attr1:a1,attr2:a2||""}); inventory[nid]=0; persistAll(); fullRender(); });
+        document.getElementById("addBallTypeBtn")?.addEventListener("click", () => openBallAddDialog());
         document.getElementById("addPresetSpiritBtn")?.addEventListener("click",()=>{
             const modal = document.createElement('div'); modal.className = 'modal';
 
@@ -4796,9 +4881,9 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         localStorage.setItem(PUBLISH_TOKEN_KEY, token);
 
         const pack = buildDataPack();
-        if (!pack.seasons.length) {
-            if (st) st.textContent = '本地没有赛季，已取消上传';
-            alert('你本地还没有任何赛季，用户端收不到内容。\n请先在「赛季管理」新增赛季，并把精灵挂到该赛季下再上传。');
+        if (!pack.seasons.length && !pack.spirits.length && !pack.balls.length) {
+            if (st) st.textContent = '本地没有可发布的内容，已取消上传';
+            alert('本地还没有赛季 / 精灵 / 球种，用户端收不到内容。\n请先维护好赛季、预设精灵库或咕噜球仓库再上传。');
             return;
         }
         const noSeason = pack.spirits.filter(p => !p.season).length;
@@ -4823,25 +4908,31 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         if (remotePack && Array.isArray(remotePack.seasons) && Array.isArray(remotePack.spirits)) {
             const localSeasons = new Set(pack.seasons.map(s => s.name));
             const localSpirits = new Set(pack.spirits.map(p => p.name));
+            const localBalls = new Set((pack.balls || []).map(b => b.name));
             const goneSeasons = remotePack.seasons.filter(s => !localSeasons.has(s.name)).map(s => s.name);
             const goneSpirits = remotePack.spirits.filter(p => !localSpirits.has(p.name)).map(p => p.name);
+            const goneBalls = (remotePack.balls || []).filter(b => !localBalls.has(b.name)).map(b => b.name);
             remoteInfo = '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5; margin:6px 0 0;">'
                 + '远端当前：<b>' + remotePack.seasons.length + '</b> 个赛季、<b>'
-                + remotePack.spirits.length + '</b> 只精灵。</p>';
-            if (goneSpirits.length || goneSeasons.length) {
+                + remotePack.spirits.length + '</b> 只精灵、<b>'
+                + (remotePack.balls || []).length + '</b> 个球种。</p>';
+            if (goneSpirits.length || goneSeasons.length || goneBalls.length) {
                 const names = goneSpirits.slice(0, 8).map(n => '「' + n + '」').join('')
                     + (goneSpirits.length > 8 ? ' 等 ' + goneSpirits.length + ' 只' : '');
                 const sn = goneSeasons.slice(0, 4).map(n => '「' + n + '」').join('')
                     + (goneSeasons.length > 4 ? ' 等 ' + goneSeasons.length + ' 个' : '');
+                const bn = goneBalls.slice(0, 6).map(n => '「' + n + '」').join('')
+                    + (goneBalls.length > 6 ? ' 等 ' + goneBalls.length + ' 个' : '');
                 removeInfo = '<p style="font-size:0.75rem; color:#a8322f; background:#fdf0ee;'
                     + ' border:1px solid #f0d2c4; border-radius:10px; padding:8px 10px; line-height:1.5;">'
                     + '警告：以下内容<b>远端有、本地没有</b>，上传后将从远端删除：<br>'
                     + (goneSpirits.length ? '精灵：' + names + '<br>' : '')
-                    + (goneSeasons.length ? '赛季：' + sn : '')
+                    + (goneSeasons.length ? '赛季：' + sn + '<br>' : '')
+                    + (goneBalls.length ? '球种：' + bn : '')
                     + '</p>';
             } else {
                 removeInfo = '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
-                    + '本地已包含远端全部内容，覆盖后不会丢失任何精灵。</p>';
+                    + '本地已包含远端全部内容，覆盖后不会丢失任何精灵 / 球种。</p>';
             }
         } else {
             remoteInfo = '<p style="font-size:0.75rem; color:#a8622f; line-height:1.5;">'
@@ -4853,7 +4944,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         modal.innerHTML = '<div class="modal-content" style="max-width:480px;">'
             + '<h3 style="margin-top:0;">上传数据包到 GitHub</h3>'
             + '<p style="font-size:0.78rem; color:#5a7a4a; line-height:1.6;">'
-            + '本次数据包：<b>' + pack.seasons.length + '</b> 个赛季、<b>' + pack.spirits.length + '</b> 只精灵。<br>'
+            + '本次数据包：<b>' + pack.seasons.length + '</b> 个赛季、<b>' + pack.spirits.length + '</b> 只精灵、<b>'
+            + (pack.balls || []).length + '</b> 个球种（只含名字/属性/是否赛季球，<b>不含库存</b>）+ 成长计划设置。<br>'
             + '上传方式：<b>覆盖</b> —— 远端 <b>data/game_data.json</b>（分支 main）会被本地数据完整替换，不是追加。</p>'
             + remoteInfo + removeInfo
             + (noSeason
@@ -4863,7 +4955,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                   + '这些精灵<b>不会推送给用户</b>。</p>'
                 : '')
             + '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
-            + '用户端只会收到<b>新赛季</b>及其中的精灵；老赛季的改动不会推送给普通用户。</p>'
+            + '用户端只会收到<b>新赛季</b>及其中的精灵、<b>本地缺的球种</b>和新版成长计划设置；'
+            + '老赛季的改动、已有球种的改动不会推送给普通用户。</p>'
             + '<div style="display:flex; gap:8px; margin-top:14px;">'
             + '<button id="confirmPublishBtn" class="primary">确认覆盖上传</button>'
             + '<button id="cancelPublishBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
@@ -5056,7 +5149,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         seasons.forEach(s => { if (s && s.name) knownSeasons[String(s.name).trim()] = true; });
         presetSpirits.forEach(p => { if (p && p.name) knownSpirits[String(p.name).trim()] = true; });
 
-        const res = { seasons: [], spirits: [], skipped: 0, pastSeasons: 0, pastSeasonNames: [] };
+        const res = { seasons: [], spirits: [], balls: [], growth: null, skipped: 0, pastSeasons: 0, pastSeasonNames: [] };
 
         const newSeasonNames = {};
         (pack.seasons || []).forEach(rs => {
@@ -5101,6 +5194,38 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             if (knownSpirits[name]) return;     // 本地已有同名精灵，无需处理
             res.skipped++;      // 普通模式：老赛季 / 未写赛季的精灵一律跳过
         });
+
+        // 球种：按名字比对，本地没有就新增（已有的球绝不覆盖：玩家的属性/顺序/库存是自己维护的）
+        const knownBalls = {};
+        ballTypes.forEach(b => { if (b && b.name) knownBalls[String(b.name).trim()] = true; });
+        (pack.balls || []).forEach(rb => {
+            const name = String((rb && rb.name) || '').trim();
+            if (!name || knownBalls[name]) return;
+            knownBalls[name] = true;
+            res.balls.push({
+                name: name,
+                attr1: rb.attr1 || '',
+                attr2: rb.attr2 || '',
+                isSeason: !!rb.isSeason
+            });
+        });
+
+        // 成长计划设置：三项数值和本地不同才提示同步（默认 3 材料 / 每周 3 次 / 1 印记）
+        const gs = pack.growthSettings;
+        if (gs && typeof gs === 'object') {
+            const norm = v => { const n = parseInt(v); return (isNaN(n) || n < 1) ? null : n; };
+            const remote = {
+                materialsPerRun: norm(gs.materialsPerRun),
+                runsPerWeek: norm(gs.runsPerWeek),
+                sealsPerRun: norm(gs.sealsPerRun)
+            };
+            if (remote.materialsPerRun !== null && remote.runsPerWeek !== null && remote.sealsPerRun !== null) {
+                const diffGrowth = remote.materialsPerRun !== growthData.materialsPerRun
+                    || remote.runsPerWeek !== growthData.runsPerWeek
+                    || remote.sealsPerRun !== growthData.sealsPerRun;
+                if (diffGrowth) res.growth = remote;
+            }
+        }
         return res;
     }
 
@@ -5131,7 +5256,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         }
 
         const diff = diffGameData(pack);
-        const totalNew = diff.seasons.length + diff.spirits.length;
+        const totalNew = diff.seasons.length + diff.spirits.length + diff.balls.length + (diff.growth ? 1 : 0);
         if (!totalNew) {
             if (remoteVer) localStorage.setItem(DATA_VERSION_KEY, remoteVer);
             loadDataConfig();
@@ -5139,7 +5264,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                 st.textContent = ((remoteVer && remoteVer !== localVer)
                     ? (isPublisherMode()
                         ? '数据已是最新（当前赛季无缺失项，过往赛季不参与比对）'
-                        : '数据已是最新（没有新赛季）')
+                        : '数据已是最新（没有新赛季 / 新球种）')
                     : '数据已是最新')
                     + (fromFile ? '（来自本地文件）'
                         : (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : ''));
@@ -5151,15 +5276,20 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         // 有新增：只记录待确认，暂不写入本地
         pendingDataPack = pack;
         const restoreCount = diff.spirits.filter(p => p.restore).length;
+        const parts = [];
+        if (diff.seasons.length) parts.push('新赛季 ' + diff.seasons.length + ' 个');
+        if (diff.spirits.length) {
+            parts.push('异色精灵 ' + (diff.spirits.length - restoreCount) + ' 个'
+                + (restoreCount ? '（含可补回 ' + restoreCount + ' 个）' : ''));
+        }
+        if (diff.balls.length) parts.push('球种 ' + diff.balls.length + ' 个');
+        if (diff.growth) parts.push('成长计划设置');
+        const summary = parts.join('、');
         if (st) {
-            st.textContent = '发现新赛季 ' + diff.seasons.length + ' 个、异色精灵 '
-                + (diff.spirits.length - restoreCount) + ' 个'
-                + (restoreCount ? '（含可补回的缺失精灵 ' + restoreCount + ' 个）' : '')
-                + '，等待你确认…'
+            st.textContent = '发现新数据：' + summary + '，等待你确认…'
                 + (fromFile ? '（来自本地文件）' : (viaMirror ? '（经镜像获取）' : ''));
         }
-        setTopDataStatus('📦 发现新赛季 ' + diff.seasons.length + ' 个、异色精灵 '
-            + (diff.spirits.length - restoreCount) + ' 个，请在弹出的窗口里确认', '#2b6e2f');
+        setTopDataStatus('📦 发现新数据：' + summary + '，请在弹出的窗口里确认', '#2b6e2f');
         showDataSyncDialog(diff, verShow);
     }
 
@@ -5209,6 +5339,27 @@ HTML_CONTENT = r"""<!DOCTYPE html>
               + '</div>'
             : '';
 
+        const ballHtml = diff.balls.length
+            ? '<div style="margin-top:10px;">'
+              + '<div style="font-size:0.78rem; color:#2b6e2f; font-weight:600; margin-bottom:4px;">新增球种 '
+              + diff.balls.length + ' 个<span style="font-weight:400; color:#7d9870;">（只加名字/属性，库存从 0 起）</span></div>'
+              + diff.balls.map(b => chip(b.name,
+                    ([b.attr1, b.attr2].filter(a => a && a !== '无').join(' + ') || '无属性')
+                    + (b.isSeason ? '　🌞 赛季球' : ''))).join('')
+              + '</div>'
+            : '';
+        const growthHtml = diff.growth
+            ? '<div style="margin-top:10px;">'
+              + '<div style="font-size:0.78rem; color:#2b6e2f; font-weight:600; margin-bottom:4px;">成长计划设置</div>'
+              + '<label style="display:flex; align-items:flex-start; gap:7px; font-size:0.76rem; color:#2f4a24; cursor:pointer;">'
+              + '<input type="checkbox" id="syncGrowthSettingsCb" checked style="margin-top:2px;">'
+              + '<span>同步为：每次周本 <b>' + diff.growth.materialsPerRun + '</b> 材料 · 每周 <b>'
+              + diff.growth.runsPerWeek + '</b> 次 · 每次消耗 <b>' + diff.growth.sealsPerRun + '</b> 印记'
+              + '<em style="display:block; font-style:normal; color:#7d9870; font-size:0.68rem;">'
+              + '本地当前：' + growthData.materialsPerRun + ' / ' + growthData.runsPerWeek + ' / ' + growthData.sealsPerRun + '</em></span></label>'
+              + '</div>'
+            : '';
+
         const curInfo = getCurrentSeasonInfo();
         const curSeasonLine = curInfo.name
             ? ('当前赛季：<b>' + escapeHtml(curInfo.name) + '</b>'
@@ -5218,19 +5369,20 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                     : '')
                + '<br>')
             : '';
+        const hasSeason = diff.seasons.length > 0;
         modal.innerHTML = '<div class="modal-content" style="max-width:480px;">'
-            + '<h3 style="margin-top:0;">发现新赛季数据</h3>'
+            + '<h3 style="margin-top:0;">' + (hasSeason ? '发现新赛季数据' : '发现新游戏数据') + '</h3>'
             + '<p style="font-size:0.76rem; color:#5a7a4a; line-height:1.5;">'
             + (verShow ? '数据版本：' + escapeHtml(verShow) + '<br>' : '')
             + curSeasonLine
             + (hasRestore
                 ? '当前处于<b>发布者模式</b>：除新赛季外，还会补回<b>当前赛季</b>里你本地缺失的精灵'
                   + '（带「补回」标记）；<b>过往赛季一律不比对、不导入</b>。'
-                : '只会把下面这些<b>新赛季</b>和它们里面的异色精灵加进来；'
-                  + '<b>已有赛季不参与比对</b>，你原有的赛季、精灵和抓取记录不会被改动。')
+                : '只会把下面这些<b>新内容</b>加进来；'
+                  + '<b>已有的赛季 / 精灵 / 球种都不参与比对</b>，你原有的记录、库存和设置不会被改动。')
             + '</p>'
             + '<div style="max-height:250px; overflow:auto; background:#f6faef; border:1px solid #e6efda; border-radius:14px; padding:8px 10px;">'
-            + seasonHtml + spiritHtml + '</div>'
+            + seasonHtml + spiritHtml + ballHtml + growthHtml + '</div>'
             + (diff.skipped
                 ? '<div style="margin-top:8px; font-size:0.7rem; color:#8a9a80; line-height:1.4;">'
                   + '另有 ' + diff.skipped + ' 个精灵属于已有赛季或已结束赛季，本次<b>不比对、不导入</b>。</div>'
@@ -5252,12 +5404,15 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         // 勾选联动：按钮文字实时显示将写入的条目数；全不选/全选切换
         const applyBtn = modal.querySelector('#applyDataBtn');
         const spiritBoxes = modal.querySelectorAll('input[data-spirit]');
+        const growthBox = modal.querySelector('#syncGrowthSettingsCb');
         function refreshApplyLabel() {
-            let n = diff.seasons.length;
+            let n = diff.seasons.length + diff.balls.length;
+            if (growthBox && growthBox.checked) n++;
             spiritBoxes.forEach(cb => { if (cb.checked) n++; });
             applyBtn.textContent = n ? ('更新到本地（' + n + ' 项）') : '标记已读，不添加';
         }
         spiritBoxes.forEach(cb => { cb.addEventListener('change', refreshApplyLabel); });
+        if (growthBox) growthBox.addEventListener('change', refreshApplyLabel);
         const toggleLink = modal.querySelector('#toggleAllSpiritsLink');
         if (toggleLink) toggleLink.onclick = function () {
             const allChecked = Array.from(spiritBoxes).every(cb => cb.checked);
@@ -5294,7 +5449,10 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             ? Array.from(modal.querySelectorAll('input[data-spirit]:checked'))
                 .map(cb => cb.getAttribute('data-spirit'))
             : null;                     // 无弹窗时视为全选
-        const added = mergeGameData(pack, selected, isPublisherMode());
+        // 「成长计划设置」是否一起同步（弹窗里可取消勾选；没有这项时默认同步）
+        const growthCb = modal ? modal.querySelector('#syncGrowthSettingsCb') : null;
+        const wantGrowth = growthCb ? !!growthCb.checked : !!(pack.growthSettings);
+        const added = mergeGameData(pack, selected, isPublisherMode(), wantGrowth);
         if (remoteVer) localStorage.setItem(DATA_VERSION_KEY, remoteVer);
         pendingDataPack = null;
         persistAll();
@@ -5303,14 +5461,27 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         // V1.4.6：同步进新赛季后立刻按系统日期重算当前赛季，
         // 不必等下次打开软件才切到新赛季。
         recheckCurrentSeasonByDate();
+        if (added.growth) {
+            const gm = document.getElementById('growthMaterialsPerRun');
+            const gr = document.getElementById('growthRunsPerWeek');
+            const gs2 = document.getElementById('growthSealsPerRun');
+            if (gm) gm.value = growthData.materialsPerRun;
+            if (gr) gr.value = growthData.runsPerWeek;
+            if (gs2) gs2.value = growthData.sealsPerRun;
+            if (typeof renderGrowthPlan === 'function') renderGrowthPlan();
+        }
         fullRender();
         loadDataConfig();
         closeDataSyncDialog();
         const st = document.getElementById('dataSyncStatus');
         if (st) {
-            st.textContent = (added.seasons || added.spirits)
-                ? '已更新：新增 ' + added.seasons + ' 个赛季、' + added.spirits
-                  + ' 个异色精灵（原有数据未改动）'
+            const parts = [];
+            if (added.seasons) parts.push(added.seasons + ' 个赛季');
+            if (added.spirits) parts.push(added.spirits + ' 只异色精灵');
+            if (added.balls) parts.push(added.balls + ' 个球种');
+            if (added.growth) parts.push('成长计划设置');
+            st.textContent = parts.length
+                ? '已更新：新增 ' + parts.join('、') + '（原有数据未改动）'
                 : '未添加任何内容（已标记本批数据为已读，下次检查不会再提示）';
         }
         // K 升级：新赛季导入后在顶部非阻塞提示，可一键跳到预设库添加新赛季精灵
@@ -5341,8 +5512,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     //    普通模式（allowRestore=false）：只处理「本次新加进来的赛季」里的精灵
     //    发布者模式（allowRestore=true）：额外可补回「当前赛季」里本地缺失的精灵；过往赛季一律不碰
     //  - selectedNames：弹窗勾选的精灵名单；不在名单里的（被用户取消勾选）一律不添加
-    function mergeGameData(pack, selectedNames, allowRestore) {
-        const added = { spirits: 0, seasons: 0, filled: 0 };
+    function mergeGameData(pack, selectedNames, allowRestore, applyGrowth) {
+        const added = { spirits: 0, seasons: 0, balls: 0, growth: 0, filled: 0 };
         const selected = selectedNames ? new Set(selectedNames) : null;
         const seasonByName = {};
         seasons.forEach(s => { if (s && s.name) seasonByName[String(s.name).trim()] = s; });
@@ -5390,10 +5561,37 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             presetByName[name] = np;
             added.spirits++;
         });
+
+        // 新增球种：只按名字补缺，已有的球（属性、顺序、库存）一律不动；新球库存从 0 开始
+        (pack.balls || []).forEach(rb => {
+            const name = String((rb && rb.name) || '').trim();
+            if (!name) return;
+            if (ballTypes.some(b => String(b.name).trim() === name)) return;
+            const nid = nextBallId++;
+            ballTypes.push({
+                id: nid, name: name,
+                attr1: rb.attr1 || '', attr2: rb.attr2 || '',
+                isSeason: !!rb.isSeason
+            });
+            inventory[nid] = 0;
+            added.balls++;
+        });
+
+        // 成长计划设置：用户在弹窗里勾了才同步（默认勾选）
+        if (applyGrowth && pack.growthSettings) {
+            const gs = pack.growthSettings;
+            const norm = (v, d) => { const n = parseInt(v); return (isNaN(n) || n < 1) ? d : n; };
+            growthData.materialsPerRun = norm(gs.materialsPerRun, growthData.materialsPerRun);
+            growthData.runsPerWeek = norm(gs.runsPerWeek, growthData.runsPerWeek);
+            growthData.sealsPerRun = norm(gs.sealsPerRun, growthData.sealsPerRun);
+            saveGrowthData();
+            added.growth = 1;
+        }
         return added;
     }
 
-    // 把本地当前的赛季 + 预设精灵库导出成数据包（给发布者用）
+    // 把本地当前的赛季 + 预设精灵库 + 球种 + 成长计划设置导出成数据包（给发布者用）
+    // 注意：球种只带「名字 / 属性 / 是否赛季球」，**不带任何库存数量**（那是玩家个人数据）
     function buildDataPack() {
         const seasonNameById = {};
         seasons.forEach(s => { seasonNameById[s.id] = s.name; });
@@ -5401,8 +5599,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             data_version: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             app: '异色逮捕计划',
-            schema: 1,
-            note: '预设精灵库与赛季数据。由软件「设置 → 软件更新 → 导出数据包」生成，覆盖仓库 data/game_data.json 即可发布。',
+            schema: 2,
+            note: '赛季、预设精灵库、咕噜球仓库球种（不含库存）与成长计划设置。由软件「设置 → 软件更新 → 导出数据包」生成，覆盖仓库 data/game_data.json 即可发布。',
             seasons: seasons.map(s => ({
                 name: s.name,
                 order: s.order || 0,
@@ -5415,14 +5613,26 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                 type: p.type || 'normal',
                 season: (p.defaultSeasonId !== null && p.defaultSeasonId !== undefined)
                     ? (seasonNameById[p.defaultSeasonId] || null) : null
-            }))
+            })),
+            balls: ballTypes.map(b => ({
+                name: b.name,
+                attr1: b.attr1 || '',
+                attr2: b.attr2 || '',
+                isSeason: !!b.isSeason
+            })),
+            growthSettings: {
+                materialsPerRun: growthData.materialsPerRun,
+                runsPerWeek: growthData.runsPerWeek,
+                sealsPerRun: growthData.sealsPerRun
+            }
         };
     }
 
     function exportDataPack() {
         const pack = buildDataPack();
         const st = document.getElementById('dataSyncStatus');
-        if (st) st.textContent = '已生成数据包：' + pack.spirits.length + ' 个精灵、' + pack.seasons.length + ' 个赛季';
+        if (st) st.textContent = '已生成数据包：' + pack.spirits.length + ' 个精灵、'
+            + pack.seasons.length + ' 个赛季、' + pack.balls.length + ' 个球种（不含库存）、成长计划设置';
         if (pythonAPI) pythonAPI.exportDataPack(JSON.stringify(pack, null, 2));
     }
 
@@ -6646,8 +6856,9 @@ class PythonAPI(QObject):
                 pack = json.load(f)
             if not isinstance(pack, dict):
                 raise ValueError("文件内容不是 JSON 对象")
-            if not isinstance(pack.get('spirits'), list) and not isinstance(pack.get('seasons'), list):
-                raise ValueError("文件里没有 spirits / seasons 字段，可能选错了文件")
+            if (not isinstance(pack.get('spirits'), list) and not isinstance(pack.get('seasons'), list)
+                    and not isinstance(pack.get('balls'), list)):
+                raise ValueError("文件里没有 spirits / seasons / balls 字段，可能选错了文件")
             result = {"status": "ok", "pack": pack,
                       "source": "file:" + os.path.basename(filePath)}
         except Exception as e:
