@@ -41,7 +41,7 @@ import tempfile
 import os
 import json
 from pathlib import Path
-from PyQt5 import QtCore, QtWidgets, QtWebEngineWidgets
+from PyQt5 import QtCore, QtWidgets, QtWebEngineWidgets, QtNetwork
 from PyQt5.QtCore import QUrl, QObject, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtGui import QIcon
@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -868,6 +868,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             </div>
         </div>
         <div class="topbar-status" id="topStatusText"></div>
+        <div class="topbar-status" id="topDataStatusText" style="display:none;"></div>
         <div class="topbar-panel" id="topUpdatePanel" style="display:none;"></div>
     </div>
 
@@ -3844,45 +3845,67 @@ id="externalLink">🔗 打开查询工具</a>
         renderGrowthPlan();
     }
 
-    // ===== 侧边栏导航 =====
-    function initSidebar() {
-        const sections = {
-            tab1: [
-                { label: '总缺口分析', id: 'card-total-gap' },
-                { label: '当前捕捉目标', id: 'card-target' },
-                { label: '待捕捉精灵', id: 'card-spirits' },
-                { label: '未知捕捉', id: 'card-unknown' }
-            ],
-            tab2: [
-                { label: '已捕捉记录', id: 'card-captured' },
-                { label: '未知记录', id: 'card-unknown-list' }
-            ],
-            tab3: [],  // 成长计划无侧边栏
-            tab4: [
-                { label: '咕噜球仓库', id: 'card-warehouse' },
-                { label: '战斗获得', id: 'card-battle' },
-                { label: '预设精灵库', id: 'card-preset' },
-                { label: '赛季管理', id: 'card-seasons' },
-                { label: '捕捉统计设置', id: 'card-stats' },
-                { label: '成长计划设置', id: 'card-growth-settings' },
-                { label: '快速粘贴导入', id: 'card-paste' }
-            ]
-        };
+    // ===== 侧边栏导航（自动扫描板块） =====
+    // 以后新增板块：只要是一个带 id 的顶层卡片（.card / .total-gap-panel 等），
+    // 就会自动出现在右侧导航栏，不需要再手改这里的列表。
+    //   · 想换个短名字：给板块加 data-nav-label="短名"
+    //   · 不想进导航栏：给板块加 data-nav-skip="1"
+    //   · 标题太长又不想加属性：在 NAV_LABEL_OVERRIDE 里加一条 id -> 短名
+    const NAV_LABEL_OVERRIDE = {
+        'dailyStatsCard': '每日需抓轮数',
+        'card-total-gap': '总缺口分析',
+        'card-unknown': '未知捕捉',
+        'card-unknown-list': '未知记录',
+        'card-battle': '战斗获得'
+    };
 
-        for (const [tabId, list] of Object.entries(sections)) {
-            const tabContent = document.getElementById(tabId);
-            if (!tabContent) continue;
-            const oldSidebar = tabContent.querySelector('.tab-sidebar');
+    // 从板块元素里取出一个像样的标题
+    function _navLabelOf(el) {
+        if (el.dataset.navLabel) return el.dataset.navLabel;
+        if (NAV_LABEL_OVERRIDE[el.id]) return NAV_LABEL_OVERRIDE[el.id];
+        const h = el.querySelector(':scope > .card-header h2, :scope > h2');
+        if (h && h.textContent.trim()) {
+            // 去掉 stat-badge 之类的小尾巴（如待捕捉数量的数字）
+            const clone = h.cloneNode(true);
+            clone.querySelectorAll('.stat-badge, .badge, span[id]').forEach(x => x.remove());
+            const t = clone.textContent.replace(/\s+/g, ' ').trim();
+            if (t) return t;
+        }
+        // total-gap-panel 这类没有 card-header 的：取第一个带 font-weight 的子元素
+        const strong = el.querySelector(':scope > div[style*="font-weight"], :scope > span[style*="font-weight"]');
+        if (strong && strong.textContent.trim()) return strong.textContent.trim();
+        // 兜底：用 id 去掉 card- 前缀
+        return String(el.id || '').replace(/^card-/, '') || '板块';
+    }
+
+    function initSidebar() {
+        document.querySelectorAll('.tab-content').forEach(tabContent => {
+            const oldSidebar = tabContent.querySelector(':scope > .tab-sidebar');
             if (oldSidebar) oldSidebar.remove();
 
-            if (list.length === 0) continue;
+            // 自动收集该 Tab 下的板块：带 id 的 .card / .total-gap-panel，以及形如 id="card-xxx" 的块。
+            // 不限直接子元素，这样嵌在大卡片里的小板块（如「未知捕捉」card-unknown）也能进导航。
+            const blocks = Array.from(tabContent.querySelectorAll(
+                '.card[id], .total-gap-panel[id], [id^="card-"]'
+            ));
+            if (!blocks.length) return;
+
+            const items = [];
+            blocks.forEach(el => {
+                if (el.dataset.navSkip === '1') return;          // 显式排除
+                if (el.classList.contains('tab-sidebar')) return;
+                const label = _navLabelOf(el);
+                if (label) items.push({ label: label, id: el.id });
+            });
+            if (!items.length) return;
 
             const sidebar = document.createElement('div');
             sidebar.className = 'tab-sidebar';
-            list.forEach(item => {
+            items.forEach(item => {
                 const a = document.createElement('a');
                 a.textContent = item.label;
                 a.dataset.target = item.id;
+                a.title = item.label;
                 a.addEventListener('click', (e) => {
                     e.preventDefault();
                     const target = document.getElementById(item.id);
@@ -3895,7 +3918,7 @@ id="externalLink">🔗 打开查询工具</a>
                 sidebar.appendChild(a);
             });
             tabContent.appendChild(sidebar);
-        }
+        });
     }
 
     // ===== 切换 Tab 记住滚动位置 =====
@@ -4533,6 +4556,7 @@ id="externalLink">🔗 打开查询工具</a>
             return;
         }
         if (st) st.textContent = '正在检查数据更新…（网络慢时会自动换镜像）';
+        if (!silent) setTopDataStatus('📦 正在检查游戏数据…（网络慢时会自动换镜像）');
         dataSyncInFlight = true;
         pythonAPI.syncGameData(url);
     }
@@ -4715,6 +4739,7 @@ id="externalLink">🔗 打开查询工具</a>
                 st.textContent = msg + '（可点「检查数据更新」重试，或点「从文件导入数据包」）';
                 st.title = msg;
             }
+            setTopDataStatus('📦 游戏数据检查失败：' + msg + '（可稍后重试，不影响软件使用）', '#c23d2b');
             return;
         }
         const pack = res.pack || {};
@@ -4726,6 +4751,7 @@ id="externalLink">🔗 打开查询工具</a>
 
         if (remoteVer && remoteVer === skippedDataVersion) {
             if (st) st.textContent = '已跳过本次数据更新（下次启动会再提示）';
+            setTopDataStatus('📦 游戏数据：已跳过本次更新（下次启动会再提示）', '#a8622f');
             return;
         }
 
@@ -4743,6 +4769,7 @@ id="externalLink">🔗 打开查询工具</a>
                     + (fromFile ? '（来自本地文件）'
                         : (viaMirror ? '｜本次走镜像地址，若刚发布建议稍后再检查' : ''));
             }
+            setTopDataStatus('📦 游戏数据已是最新' + (verShow ? '（数据版本 ' + verShow + '）' : ''));
             return;
         }
 
@@ -4756,6 +4783,8 @@ id="externalLink">🔗 打开查询工具</a>
                 + '，等待你确认…'
                 + (fromFile ? '（来自本地文件）' : (viaMirror ? '（经镜像获取）' : ''));
         }
+        setTopDataStatus('📦 发现新赛季 ' + diff.seasons.length + ' 个、异色精灵 '
+            + (diff.spirits.length - restoreCount) + ' 个，请在弹出的窗口里确认', '#2b6e2f');
         showDataSyncDialog(diff, verShow);
     }
 
@@ -5013,6 +5042,7 @@ id="externalLink">🔗 打开查询工具</a>
         updateCheckSilent = !!silent;
         pendingDataCheckSilent = !!silent;
         dataCheckedThisRound = false;
+        setTopDataStatus('');   // 每轮检查先清空上一轮的数据结果
         const status = document.getElementById('updateStatus');
         // 发布形态是仓库内 exe + version.json，清单直链优先。旧版把「GitHub 仓库」框排在第一位，
         // 1.3.0/1.3.1 存下的 owner/repo 会一直残留，导致检查更新改走 Releases → 误报「已是最新版本」。
@@ -5025,8 +5055,9 @@ id="externalLink">🔗 打开查询工具</a>
             afterVersionCheck();
             return;
         }
-        if (status) status.textContent = '正在检查版本…';
-        setTopStatus('正在后台检查更新…');
+        if (status) status.textContent = '正在检查版本与游戏数据…';
+        setTopStatus('正在后台检查版本与游戏数据…');
+        setTopDataStatus('📦 将在版本检查后一并检查游戏数据…');
         if (pythonAPI) pythonAPI.checkUpdate(source);
         else afterVersionCheck();
     }
@@ -5127,6 +5158,16 @@ id="externalLink">🔗 打开查询工具</a>
     function setTopStatus(text, color) {
         const el = document.getElementById('topStatusText');
         if (el) { el.textContent = text || ''; el.style.color = color || '#7d9870'; }
+    }
+    // 顶部抬头的「游戏数据」状态行：版本与数据每次一并检查，结果都在这里显示，
+    // 不用再单独跑到 设置 → 软件更新 里去看。
+    function setTopDataStatus(text, color) {
+        const el = document.getElementById('topDataStatusText');
+        if (el) {
+            el.textContent = text || '';
+            el.style.color = color || '#7d9870';
+            el.style.display = text ? 'block' : 'none';
+        }
     }
     function showTopUpdateDot(on) {
         const d = document.getElementById('topUpdateDot');
@@ -6366,6 +6407,13 @@ class PythonAPI(QObject):
         退出方式：正常 quit（Qt 先释放 QWebEngine 子进程与文件句柄），引导程序即可顺利清掉
         自己的 _MEI 目录，不弹框。quit 若 3 秒内没生效，再用 os._exit 兜底，保证一定退出。
         """
+        # 先释放单实例命名管道：否则新实例一连就发现「已有人在跑」，会自行退出，
+        # 表现为点完「立即重启」软件直接关掉、再也起不来。标记跳过退出清理，
+        # 免得旧进程退出时（app.quit 触发 cleanup）又把刚交给新进程的锁删掉。
+        global _skip_release_on_cleanup
+        _skip_release_on_cleanup = True
+        release_single_instance()
+        time.sleep(0.15)  # 给系统释放命名管道的时间，降低新旧进程抢锁的竞态
         exe = os.path.abspath(sys.executable)
         env = os.environ.copy()
         for k in ("_MEIPASS2", "_PYI_APPLICATION_HOME_DIR", "_PYI_ARCHIVE_FILE"):
@@ -6629,6 +6677,87 @@ def resource_path(name):
     return candidates[-1]
 
 
+# ----------------------------- 单实例（防止多开） -----------------------------
+# 背景：内嵌网页的 localStorage / 数据都存在本机，多开会出现「只有第一个窗口有记录、
+# 后开的没数据」，两个窗口各自保存还会互相覆盖。这里用 QLocalServer 命名管道保证
+# 同时只跑一个实例；再点 exe 时把已开窗口提到前台，不再新开一个。
+# 注意「立即重启」：restartApp 会先释放这把锁再拉起新进程，否则新进程会被误判为多开而退出。
+_SINGLE_KEY = "iseki_arrest_single_instance_v1"
+_single_server = None
+_main_view_ref = None
+_skip_release_on_cleanup = False  # 立即重启时置 True：锁已提前释放，退出清理别误删新进程的锁
+
+
+def _activate_existing_window():
+    """已开实例收到「又有人启动」时，把自己的窗口提到前台。"""
+    v = _main_view_ref
+    if v is None:
+        return
+    try:
+        if v.isMinimized():
+            v.showNormal()
+        else:
+            v.show()
+        v.raise_()
+        v.activateWindow()
+    except Exception:
+        pass
+
+
+def release_single_instance():
+    """释放单实例锁（立即重启 / 退出时调用）。"""
+    global _single_server
+    srv = _single_server
+    _single_server = None
+    if srv is not None:
+        try:
+            srv.close()
+        except Exception:
+            pass
+    try:
+        QtNetwork.QLocalServer.removeServer(_SINGLE_KEY)
+    except Exception:
+        pass
+
+
+def acquire_single_instance():
+    """返回 True=本进程成为唯一实例；False=已有实例在跑，调用方应立即退出。"""
+    global _single_server
+    # 1) 先探测有没有活着的实例：连得上就说明已经开了一个。
+    #    必须先探测再 removeServer，否则会把活实例的 server 删掉导致真双开。
+    probe = QtNetwork.QLocalSocket()
+    probe.connectToServer(_SINGLE_KEY)
+    if probe.waitForConnected(350):
+        try:
+            probe.writeData(b"activate")
+            probe.flush()
+            probe.waitForBytesWritten(300)
+        except Exception:
+            pass
+        probe.disconnectFromServer()
+        return False
+    # 2) 连不上：清掉上次异常退出（os._exit）残留的死 server，再自己监听。
+    QtNetwork.QLocalServer.removeServer(_SINGLE_KEY)
+    server = QtNetwork.QLocalServer()
+
+    def _on_new_connection():
+        try:
+            while server.hasPendingConnections():
+                conn = server.nextPendingConnection()
+                if conn is not None:
+                    conn.readAll()
+        except Exception:
+            pass
+        _activate_existing_window()
+
+    server.newConnection.connect(_on_new_connection)
+    if not server.listen(_SINGLE_KEY):
+        # 极小概率：恰好被同时启动的另一进程抢占 → 认作已有实例。
+        return False
+    _single_server = server
+    return True
+
+
 # ----------------------------- 主程序 ---------------------------------
 def cleanup_orphan_mei():
     """启动时清理历史残留的 PyInstaller 临时目录（_MEIxxxx）与未完成下载的临时安装包。
@@ -6663,12 +6792,20 @@ def cleanup_orphan_mei():
 
 
 def main():
-    cleanup_orphan_mei()
     app = QtWidgets.QApplication(sys.argv)
     app.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     app.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
-    
+
+    # 单实例：已有窗口在跑就把那扇窗口提到前台，本进程直接退出，防止多开各存一份数据。
+    # 必须放在 QApplication 之后、创建 WebEngine 窗口之前。
+    if not acquire_single_instance():
+        sys.exit(0)
+
+    cleanup_orphan_mei()
+
     view = QtWebEngineWidgets.QWebEngineView()
+    global _main_view_ref
+    _main_view_ref = view
     # 设置自定义网页页签处理
     page = ExternalLinkPage(view)
     view.setPage(page)
@@ -6700,6 +6837,8 @@ def main():
     view.show()
     
     def cleanup():
+        if not _skip_release_on_cleanup:
+            release_single_instance()
         try:
             os.unlink(tmp_file.name)
         except Exception:
