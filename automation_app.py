@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.5.0"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -475,6 +475,24 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             max-height: 80vh;
             overflow-y: auto;
         }
+        .app-toast {
+            position: fixed;
+            left: 50%;
+            bottom: 32px;
+            transform: translateX(-50%);
+            background: #2f4a24;
+            color: #fff;
+            padding: 11px 20px;
+            border-radius: 24px;
+            font-size: 0.85rem;
+            z-index: 2000;
+            max-width: 80%;
+            text-align: center;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+            transition: opacity 0.25s;
+            pointer-events: none;
+        }
+        .app-toast.err { background: #a33; }
         .highlight-ball {
             background: #fff0cc !important;
             border: 2px solid #f5a623 !important;
@@ -869,6 +887,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         </div>
         <div class="topbar-status" id="topStatusText"></div>
         <div class="topbar-status" id="topDataStatusText" style="display:none;"></div>
+        <div class="topbar-status" id="topUnknownAlert" style="display:none; cursor:pointer; color:#a8622f; font-weight:500;"></div>
+        <div class="topbar-status" id="topSeasonAlert" style="display:none; color:#2b6e2f; font-weight:500;"></div>
         <div class="topbar-panel" id="topUpdatePanel" style="display:none;"></div>
     </div>
 
@@ -925,6 +945,9 @@ id="externalLink">🔗 打开查询工具</a>
                     <button id="historyRecordBtn" class="small primary" style="margin-left:4px;">📜 补录历史消耗</button>
                 </div>
             </div>
+            <div class="flex-between" style="margin-bottom:8px;">
+                <input type="text" id="spiritSearchInput" placeholder="🔍 搜索待捕捉精灵…" style="flex:1;" autocomplete="off">
+            </div>
             <div class="spirit-group-tabs" id="spiritDisplayTabs">
                 <div class="group-tab active" data-display="all">全部</div>
                 <div class="group-tab" data-display="wonder">✨ 奇遇</div>
@@ -945,6 +968,7 @@ id="externalLink">🔗 打开查询工具</a>
                     <option value="">-- 选择预设精灵 --</option>
                 </select>
                 <button id="addSpiritFromPresetBtn" class="primary">添加</button>
+                <button id="batchAddSpiritBtn" class="small">☑️ 批量添加</button>
             </div>
             <hr>
             <div style="margin-top: 12px; background: #fff8e7; border-radius: 20px; padding: 12px;" id="card-unknown">
@@ -963,12 +987,18 @@ id="externalLink">🔗 打开查询工具</a>
                 <div class="header-actions">
                     <button id="exportCapturedBtn" class="small">📤 导出</button>
                     <button id="importCapturedBtn" class="small">📥 导入</button>
+                    <button id="batchSeasonCapturedBtn" class="small">🏆 批量改赛季</button>
+                    <button id="batchDeleteCapturedBtn" class="small danger">🗑️ 批量删除</button>
                     <button id="addCapturedRecordBtn" class="small primary">➕ 新增</button>
                 </div>
             </div>
-            <div class="flex-between" style="margin-bottom: 12px;">
+            <div class="flex-between" style="margin-bottom: 8px;">
                 <label>🏆 赛季筛选：</label>
                 <select id="seasonFilterSelect" class="season-select" style="flex:2; max-height: 200px; overflow-y: auto;"></select>
+            </div>
+            <div class="flex-between" style="margin-bottom: 12px;">
+                <label>🔍 搜索精灵：</label>
+                <input type="text" id="capturedSearchInput" placeholder="输入精灵名筛选" style="flex:2;" autocomplete="off">
             </div>
             <div id="avgStatsContainer" class="avg-stats">加载中...</div>
             <div id="capturedListContainer">暂无记录</div>
@@ -1042,6 +1072,7 @@ id="externalLink">🔗 打开查询工具</a>
                 <select id="battleBallSelect" style="flex:2"></select>
                 <input type="number" id="battleAmount" value="1" min="1" style="flex:1">
                 <button id="doBattleGetBtn" class="primary">✨ 获得 (不消耗资源)</button>
+                <button id="batchBattleGetBtn" class="small">📋 批量获得</button>
             </div>
             <div class="date-filter">
                 <label style="font-size:0.7rem;">📅 显示日期：</label>
@@ -1552,16 +1583,27 @@ id="externalLink">🔗 打开查询工具</a>
         });
     }
 
-    // ---------- 添加成长精灵（手动输入名称） ----------
+    // ---------- 添加成长精灵（从精灵库选 / 手输，B 升级） ----------
     function showAddGrowthSpiritDialog() {
+        // 汇总预设库 / 待捕捉 / 已捕捉里的精灵名，去重后供选择
+        const nameSet = new Set();
+        (presetSpirits || []).forEach(p => { if (p && p.name) nameSet.add(String(p.name).trim()); });
+        (spirits || []).forEach(p => { if (p && p.name) nameSet.add(String(p.name).trim()); });
+        (capturedSpirits || []).forEach(p => { if (p && p.name) nameSet.add(String(p.name).trim()); });
+        // 已在成长计划里的排到最前打勾提示为主，这里仅做候选，不重复添加校验在确认处
+        const knownNames = Array.from(nameSet).filter(Boolean).sort();
+        const datalistOpts = knownNames.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+
         const modal = document.createElement('div'); modal.className = 'modal';
         let starOptions = [0,1,2,3,4,5].map(s => `<option value="${s}">${s}星</option>`).join('');
         modal.innerHTML = `<div class="modal-content">
             <h3>添加成长精灵</h3>
-            <p>输入精灵名称并设置当前星级：</p>
+            <p>从下方选择已有精灵，也可直接输入名称：</p>
             <div style="margin-bottom:12px;">
                 <label>精灵名称</label>
-                <input type="text" id="growthNameInput" placeholder="请输入精灵名称" style="width:100%;">
+                <input type="text" id="growthNameInput" list="growthNameList" placeholder="选择或输入精灵名称" style="width:100%;" autocomplete="off">
+                <datalist id="growthNameList">${datalistOpts}</datalist>
+                <div style="font-size:0.7rem; color:#7d9870; margin-top:4px;">已收录 ${knownNames.length} 只精灵，输入开头即可筛选；库里没有的可手动输入。</div>
             </div>
             <div style="margin-bottom:12px;">
                 <label>当前星级</label>
@@ -1578,7 +1620,12 @@ id="externalLink">🔗 打开查询工具</a>
         modal.querySelector('#growthAddConfirm').onclick = function() {
             try {
                 let name = modal.querySelector('#growthNameInput').value.trim();
-                if (!name) { alert("请输入精灵名称"); return; }
+                if (!name) { showToast('请输入或选择精灵名称', true); return; }
+                // 校验重名：成长计划里已有同名精灵则提示
+                if ((growthData.spirits || []).some(gs => String(gs.name).trim() === name)) {
+                    showToast('成长计划里已有「' + name + '」，请勿重复添加', true);
+                    return;
+                }
                 let star = parseInt(modal.querySelector('#growthStarSelect').value);
                 if (isNaN(star) || star < 0) star = 0;
                 if (star > MAX_STAR) star = MAX_STAR;
@@ -1590,9 +1637,60 @@ id="externalLink">🔗 打开查询工具</a>
                 saveGrowthData();
                 renderGrowthPlan();
                 modal.remove();
-            } catch(e) { alert('添加失败：' + e.message); } finally { modal.remove(); }
+                showToast('已添加「' + name + '」到成长计划');
+            } catch(e) { showToast('添加失败：' + e.message, true); } finally { modal.remove(); }
         };
         modal.querySelector('#growthAddCancel').onclick = function() { modal.remove(); };
+    }
+
+    // G 升级：批量从预设库添加待捕捉精灵（勾选多个一次加入）
+    function showBatchAddSpiritsDialog() {
+        // 过滤掉已在待捕捉 / 已捕捉里的同名精灵
+        const usedNames = new Set();
+        (spirits || []).forEach(s => usedNames.add(String(s.name||'').trim()));
+        (capturedSpirits || []).forEach(s => usedNames.add(String(s.name||'').trim()));
+        const candidates = (presetSpirits || []).filter(p => p && p.name && !usedNames.has(String(p.name).trim()));
+        if (!candidates.length) { showToast('预设库里没有可添加的精灵（都已加入或已抓）', true); return; }
+        const modal = document.createElement('div'); modal.className = 'modal';
+        const rows = candidates.map((p, i) =>
+            `<label style="display:flex; align-items:center; gap:8px; padding:5px 2px; font-size:0.8rem; cursor:pointer;">
+                <input type="checkbox" class="batch-spirit-cb" value="${i}">
+                <span>${escapeHtml(p.name)}${p.type === 'wonder' ? ' ✨' : ''}</span>
+             </label>`).join('');
+        modal.innerHTML = `<div class="modal-content" style="max-width:420px;">
+            <h3 style="margin-top:0;">批量添加待捕捉精灵</h3>
+            <p style="font-size:0.74rem; color:#5a7a4a;">勾选要加入的精灵，一次添加（已加入/已抓的已排除）：</p>
+            <div style="max-height:280px; overflow:auto; background:#f6faef; border:1px solid #e6efda; border-radius:14px; padding:8px 12px;">
+                ${rows}
+            </div>
+            <div style="display:flex; gap:8px; margin-top:14px;">
+                <button id="batchAddConfirm" class="primary">添加选中</button>
+                <button id="batchAddAll" class="small">全选</button>
+                <button id="batchAddCancel">取消</button>
+            </div>
+        </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#batchAddAll').onclick = function () {
+            const boxes = modal.querySelectorAll('.batch-spirit-cb');
+            const allChecked = Array.from(boxes).every(b => b.checked);
+            boxes.forEach(b => { b.checked = !allChecked; });
+            this.textContent = allChecked ? '全选' : '全不选';
+        };
+        modal.querySelector('#batchAddConfirm').onclick = function () {
+            const boxes = modal.querySelectorAll('.batch-spirit-cb:checked');
+            if (!boxes.length) { showToast('请先勾选精灵', true); return; }
+            let n = 0;
+            boxes.forEach(function (b) {
+                const p = candidates[parseInt(b.value, 10)];
+                if (!p) return;
+                spirits.push({ id: nextSpiritId++, name: p.name, attrs: [...(p.attrs||[])],
+                    requiredCount: settingBallsPerSpirit || 1500, consumptionLogs: [], prismWarning: false, type: p.type });
+                n++;
+            });
+            persistAll(); syncWithPreset(); fullRender(); modal.remove();
+            showToast('已批量添加 ' + n + ' 只精灵到待捕捉');
+        };
+        modal.querySelector('#batchAddCancel').onclick = function() { modal.remove(); };
     }
 
     // ---------- 成长计划设置保存 ----------
@@ -1752,6 +1850,18 @@ id="externalLink">🔗 打开查询工具</a>
         // 加载成长计划数据
         loadGrowthData();
         renderGrowthPlan();
+        // A 升级：全部数据导入后提示库存快照状态
+        try {
+            const imported = localStorage.getItem('just_imported_snapshot');
+            if (imported) {
+                localStorage.removeItem('just_imported_snapshot');
+                if (imported === 'reset') {
+                    showToast('数据已导入（老备份无库存快照，请点「开始捕捉」重建快照后再记录消耗）', true);
+                } else {
+                    showToast('数据已导入，库存快照一并恢复 ✓');
+                }
+            }
+        } catch (e) {}
     }
 
     function refreshIdSequences() {
@@ -1937,9 +2047,15 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     function getFilteredSpiritsForDisplay() {
-        if(currentDisplayGroup === "all") return spirits.slice();
-        if(currentDisplayGroup === "wonder") return spirits.filter(s => s.type === "wonder");
-        return spirits.filter(s => s.type === "normal");
+        let list;
+        if(currentDisplayGroup === "all") list = spirits.slice();
+        else if(currentDisplayGroup === "wonder") list = spirits.filter(s => s.type === "wonder");
+        else list = spirits.filter(s => s.type === "normal");
+        // D 升级：按名字搜索
+        const si = document.getElementById('spiritSearchInput');
+        const kw = (si && si.value || '').trim().toLowerCase();
+        if (kw) list = list.filter(s => String(s.name || '').toLowerCase().indexOf(kw) >= 0);
+        return list;
     }
 
     // 以下函数原本用于最优顺序，现已不使用，但保留以防其他调用
@@ -2002,13 +2118,16 @@ id="externalLink">🔗 打开查询工具</a>
         return false;
     }
 
-    function showRemainingStockForAllBalls(title, callback) {
+    function showRemainingStockForAllBalls(title, callback, opts) {
         if(!lastCaptureStock) {
             alert("请先点击「开始捕捉」初始化库存快照");
             return;
         }
+        opts = opts || {};
         const modal = document.createElement('div'); modal.className = 'modal';
         let html = `<div class="modal-content"><h3>${title}</h3>`;
+        // J 升级：可选的头部（把「记录类型」等选择合并进同一弹窗，减少弹窗层级）
+        if (opts.headHtml) html += opts.headHtml;
         html += `<div style="font-size:0.7rem; margin-bottom:8px;">请填写当前背包中<b>剩余</b>的咕噜球数量：</div>`;
         for(let ball of ballTypes) {
             let currentStock = inventory[ball.id] || 0;
@@ -2056,8 +2175,10 @@ id="externalLink">🔗 打开查询工具</a>
             }
             lastCaptureStock = { ...inventory };
             persistAll();
+            let extra = null;
+            if (typeof opts.getExtra === 'function') extra = opts.getExtra(modal);
             modal.remove();
-            callback(consumption, remaining);
+            callback(consumption, remaining, extra);
         };
         modal.querySelector('#cancelRemain').onclick = () => modal.remove();
     }
@@ -2184,13 +2305,10 @@ id="externalLink">🔗 打开查询工具</a>
 
     function showUnknownCaptureDialog() {
         if (hasUnconfirmedFinalRecord()) {
-            alert("存在未确认的最终捕捉记录，请先确认或删除该记录，才能继续记录新的未知捕捉。");
+            showToast("存在未确认的最终捕捉记录，请先确认或删除该记录", true);
             return;
         }
-        if(!lastCaptureStock) {
-            alert("请先点击「开始捕捉」初始化库存快照");
-            return;
-        }
+        ensureCaptureSnapshot();
         let pendingRecord = null;
         for (let rec of unknownRecords) {
             if (rec.status === 'pending' && !rec.consumptionLogs.some(log => log.type === 'final')) {
@@ -2200,23 +2318,17 @@ id="externalLink">🔗 打开查询工具</a>
         }
 
         function startCaptureFlow(appendToId) {
-            const typeModal = document.createElement('div'); typeModal.className = 'modal';
-            typeModal.innerHTML = `<div class="modal-content">
-                <h3>🎲 未知捕捉 - 记录消耗</h3>
-                <p>选择记录类型：</p>
-                <select id="unknownRecordType" style="width:100%; margin-bottom:12px;">
-                    <option value="pause">⏸️ 暂停/中间记录</option>
-                    <option value="final">🎯 最终捕捉（将生成一条未知记录）</option>
+            // J 升级：把「记录类型」和「剩余库存」合并进一个弹窗（原来要两步）
+            const headHtml = `<div style="background:#fff8e7; border-radius:12px; padding:8px 10px; margin-bottom:10px;">
+                <label style="font-size:0.75rem; font-weight:500;">记录类型：</label>
+                <select id="unknownRecordType" style="width:100%; margin-top:4px;">
+                    <option value="pause">⏸️ 暂停/中间记录（之后继续）</option>
+                    <option value="final">🎯 最终捕捉（记录后确认精灵）</option>
                 </select>
-                <div style="display:flex; gap:8px;"><button id="confirmType" class="primary">下一步</button><button id="cancelType">取消</button></div>
             </div>`;
-            document.body.appendChild(typeModal);
-            typeModal.querySelector('#confirmType').onclick = () => {
-                const recordType = typeModal.querySelector('#unknownRecordType').value;
-                typeModal.remove();
-                showRemainingStockForAllBalls("记录未知捕捉消耗", function(consumption, remaining) {
+            showRemainingStockForAllBalls("🎲 未知捕捉 - 记录消耗", function(consumption, remaining, recordType) {
                     if(Object.keys(consumption).length === 0) {
-                        alert("没有消耗任何咕噜球，无需记录");
+                        showToast("没有消耗任何咕噜球，无需记录", true);
                         return;
                     }
                     const now = new Date();
@@ -2234,7 +2346,7 @@ id="externalLink">🔗 打开查询工具</a>
                             targetId = target.id;
                             persistAll();
                             fullRender();
-                            alert(`已追加消耗记录，总消耗已更新。`);
+                            showToast('已追加消耗记录，总消耗已更新');
                         } else {
                             const newRecord = {
                                 id: nextUnknownId++,
@@ -2246,7 +2358,7 @@ id="externalLink">🔗 打开查询工具</a>
                             targetId = newRecord.id;
                             persistAll();
                             fullRender();
-                            alert(`未知记录已保存，消耗 ${Object.values(consumption).reduce((a,b)=>a+b,0)} 个咕噜球。`);
+                            showToast('未知记录已保存，消耗 ' + Object.values(consumption).reduce((a,b)=>a+b,0) + ' 个咕噜球');
                         }
                     } else {
                         const newRecord = {
@@ -2259,21 +2371,21 @@ id="externalLink">🔗 打开查询工具</a>
                         targetId = newRecord.id;
                         persistAll();
                         fullRender();
-                        alert(`未知记录已保存，消耗 ${Object.values(consumption).reduce((a,b)=>a+b,0)} 个咕噜球。`);
+                        showToast('未知记录已保存，消耗 ' + Object.values(consumption).reduce((a,b)=>a+b,0) + ' 个咕噜球');
                     }
                     if (recordType === 'final' && targetId !== null) {
                         const finalRecord = unknownRecords.find(r => r.id === targetId);
                         if (finalRecord) {
                             confirmUnknownRecord(targetId, function(success) {
                                 if (!success) {
-                                    alert("最终记录已保存，请尽快确认精灵，否则无法继续记录未知捕捉。");
+                                    showToast("最终记录已保存，请尽快确认精灵，否则无法继续记录未知捕捉。", true);
                                 }
                             });
                         }
                     }
-                });
-            };
-            typeModal.querySelector('#cancelType').onclick = () => typeModal.remove();
+            }, { headHtml: headHtml, getExtra: function (m) {
+                return m.querySelector('#unknownRecordType') ? m.querySelector('#unknownRecordType').value : 'pause';
+            } });
         }
 
         if (pendingRecord) {
@@ -2381,14 +2493,19 @@ id="externalLink">🔗 打开查询工具</a>
             for(let ball of ballTypes) {
                 html += `<div style="margin-bottom:6px;"><label>${ball.name}: </label><input type="number" id="hist_consume_${ball.id}" min="0" value="0" style="width:80px;"></div>`;
             }
-            html += `<div style="display:flex; gap:8px; margin-top:16px;"><button id="confirmHistory">确认补录</button><button id="cancelHistory">取消</button></div></div>`;
+            html += `<div style="display:flex; gap:8px; margin-top:16px;">
+                <button id="confirmHistory" class="primary">确认补录</button>
+                <button id="confirmHistoryContinue" class="small">补录并继续下一只</button>
+                <button id="cancelHistory">取消</button>
+            </div></div>`;
             const modal = document.createElement('div'); modal.className = 'modal';
             modal.innerHTML = html;
             document.body.appendChild(modal);
-            modal.querySelector('#confirmHistory').onclick = () => {
+            // H 升级：补录逻辑复用，支持「补录并继续下一只」
+            function doHistoryAdd(continueMode) {
                 const spiritId = parseInt(modal.querySelector('#historySpiritSelect').value);
                 const spirit = spirits.find(s => s.id === spiritId);
-                if(!spirit) { alert("精灵不存在"); modal.remove(); resolve(false); return; }
+                if(!spirit) { showToast("精灵不存在", true); return; }
                 const consumption = {};
                 for(let ball of ballTypes) {
                     let val = parseInt(modal.querySelector(`#hist_consume_${ball.id}`).value);
@@ -2396,7 +2513,7 @@ id="externalLink">🔗 打开查询工具</a>
                     if(val > 0) consumption[ball.id] = val;
                 }
                 if(Object.keys(consumption).length === 0) {
-                    alert("至少填写一种咕噜球的消耗数量");
+                    showToast("至少填写一种咕噜球的消耗数量", true);
                     return;
                 }
                 if(!spirit.consumptionLogs) spirit.consumptionLogs = [];
@@ -2406,12 +2523,22 @@ id="externalLink">🔗 打开查询工具</a>
                     type: "history",
                     note: "历史补录"
                 });
-                persistAll();
-                modal.remove();
-                resolve(true);
-                fullRender();
-                alert(`已为 ${spirit.name} 补录历史消耗，累计消耗已更新。`);
-            };
+                persistAll(); fullRender();
+                if (!continueMode) {
+                    modal.remove();
+                    resolve(true);
+                    showToast('已为 ' + spirit.name + ' 补录历史消耗');
+                } else {
+                    // 切到下一只精灵，清空数量输入
+                    const sel = modal.querySelector('#historySpiritSelect');
+                    const idx = Array.from(sel.options).findIndex(o => parseInt(o.value) === spiritId);
+                    if (idx < sel.options.length - 1) sel.selectedIndex = idx + 1;
+                    ballTypes.forEach(b => { const inp = modal.querySelector(`#hist_consume_${b.id}`); if (inp) inp.value = 0; });
+                    showToast('已补录 ' + spirit.name + '，请继续录入下一只');
+                }
+            }
+            modal.querySelector('#confirmHistory').onclick = () => doHistoryAdd(false);
+            modal.querySelector('#confirmHistoryContinue').onclick = () => doHistoryAdd(true);
             modal.querySelector('#cancelHistory').onclick = () => { modal.remove(); resolve(false); };
         });
     }
@@ -2484,6 +2611,59 @@ id="externalLink">🔗 打开查询工具</a>
             persistAll();
             fullRender();
         }
+    }
+
+    // L 升级：已捕捉批量操作（改赛季 / 删除）——列出全部记录勾选后批量处理
+    function showBatchCapturedDialog(mode) {
+        if (!capturedSpirits.length) { showToast('暂无已捕捉记录', true); return; }
+        const isDelete = mode === 'delete';
+        const seasonOpts = [`<option value="__none__">-- 无赛季 --</option>`]
+            .concat([...seasons].sort((a,b)=>(b.order||0)-(a.order||0))
+                .map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`)).join('');
+        const rows = capturedSpirits.map((c, i) => {
+            const sn = seasons.find(s => s.id === c.seasonId);
+            return `<label style="display:flex; align-items:center; gap:8px; padding:5px 2px; font-size:0.78rem; cursor:pointer; border-bottom:1px solid #eef2e8;">
+                <input type="checkbox" class="bc-cb" value="${i}">
+                <span>${escapeHtml(c.name)} <em style="font-style:normal; color:#7d9870;">(${sn ? escapeHtml(sn.name) : '无赛季'} · ${c.capturedAt ? new Date(c.capturedAt).toLocaleDateString() : ''})</em></span>
+            </label>`;
+        }).join('');
+        const modal = document.createElement('div'); modal.className = 'modal';
+        modal.innerHTML = `<div class="modal-content" style="max-width:460px;">
+            <h3 style="margin-top:0;">${isDelete ? '批量删除已捕捉' : '批量改赛季'}</h3>
+            <p style="font-size:0.74rem; color:#5a7a4a;">勾选要处理的记录：</p>
+            <div style="max-height:260px; overflow:auto;">${rows}</div>
+            ${isDelete ? '' : `<div style="margin-top:10px;"><label>改为赛季：</label><select id="bcSeason" style="width:100%;">${seasonOpts}</select></div>`}
+            <div style="display:flex; gap:8px; margin-top:14px;">
+                <button id="bcConfirm" class="${isDelete ? 'danger' : 'primary'}">${isDelete ? '确认删除' : '确认修改'}</button>
+                <button id="bcAll" class="small">全选</button>
+                <button id="bcCancel">取消</button>
+            </div>
+        </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#bcAll').onclick = function () {
+            const boxes = modal.querySelectorAll('.bc-cb');
+            const allChecked = Array.from(boxes).every(b => b.checked);
+            boxes.forEach(b => { b.checked = !allChecked; });
+            this.textContent = allChecked ? '全选' : '全不选';
+        };
+        modal.querySelector('#bcConfirm').onclick = function () {
+            const idxs = Array.from(modal.querySelectorAll('.bc-cb:checked')).map(b => parseInt(b.value, 10));
+            if (!idxs.length) { showToast('请先勾选记录', true); return; }
+            if (isDelete) {
+                if (!confirm('确定删除选中的 ' + idxs.length + ' 条记录？不可撤销。')) return;
+                const idSet = new Set(idxs.map(i => capturedSpirits[i] && capturedSpirits[i].id).filter(Boolean));
+                capturedSpirits = capturedSpirits.filter(c => !idSet.has(c.id));
+                persistAll(); fullRender(); modal.remove();
+                showToast('已删除 ' + idSet.size + ' 条记录');
+            } else {
+                const sv = modal.querySelector('#bcSeason').value;
+                const targetId = sv === '__none__' ? null : parseInt(sv, 10);
+                idxs.forEach(i => { if (capturedSpirits[i]) capturedSpirits[i].seasonId = targetId; });
+                persistAll(); fullRender(); modal.remove();
+                showToast('已把 ' + idxs.length + ' 条记录改到新赛季');
+            }
+        };
+        modal.querySelector('#bcCancel').onclick = function () { modal.remove(); };
     }
 
     function showAddCapturedRecordDialog() {
@@ -2672,7 +2852,7 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     async function pauseCapture(spirit) {
-        if(!captureSnapshot){ alert("请先开始捕捉"); return; }
+        ensureCaptureSnapshot();
         const result = await showRemainingStockDialog(spirit, "⏸️ 暂停捕捉 - 记录当前剩余库存");
         if(!result) return;
         const { consumption, remaining } = result;
@@ -2689,20 +2869,21 @@ id="externalLink">🔗 打开查询工具</a>
         });
         persistAll();
         fullRender();
-        alert(`已记录暂停消耗，${spirit.name} 累计消耗已更新。`);
+        showToast('⏸️ 已记录暂停消耗，' + spirit.name + ' 累计消耗已更新');
     }
     async function finalCapture(spirit) {
-        if(!captureSnapshot){ alert("请先开始捕捉"); return; }
-        // 弹出获取方式选择
+        ensureCaptureSnapshot();
+        // 弹出获取方式选择（C 升级：记住上次选择）
+        const lastMethod = (() => { try { return localStorage.getItem('last_capture_method') || '自己捕捉'; } catch(e){ return '自己捕捉'; } })();
         const methodPromise = new Promise((resolve) => {
             const modal = document.createElement('div'); modal.className = 'modal';
+            const methodOpts = ['自己捕捉', '朋友赠送', '赛季特色'].map(m =>
+                `<option value="${m}"${m === lastMethod ? ' selected' : ''}>${m}</option>`).join('');
             modal.innerHTML = `<div class="modal-content">
                 <h3>选择获取方式</h3>
-                <p>请选择该精灵的获取方式：</p>
+                <p>请选择该精灵的获取方式（默认上次的选择）：</p>
                 <select id="captureMethodSelect" style="width:100%; margin:10px 0;">
-                    <option value="自己捕捉">自己捕捉</option>
-                    <option value="朋友赠送">朋友赠送</option>
-                    <option value="赛季特色">赛季特色</option>
+                    ${methodOpts}
                 </select>
                 <div style="display:flex; gap:8px;">
                     <button id="confirmMethod" class="primary">确认</button>
@@ -2712,6 +2893,7 @@ id="externalLink">🔗 打开查询工具</a>
             document.body.appendChild(modal);
             modal.querySelector('#confirmMethod').onclick = () => {
                 const method = modal.querySelector('#captureMethodSelect').value;
+                try { localStorage.setItem('last_capture_method', method); } catch(e){}
                 modal.remove();
                 resolve(method);
             };
@@ -2756,12 +2938,25 @@ id="externalLink">🔗 打开查询工具</a>
             seasonId: seasonId,
             captureMethod: method
         });
+        // F 升级：捕捉成功自动生成库存消耗流水（每个消耗的球记一条负数流水）
+        const nowF = new Date();
+        Object.entries(consumption || {}).forEach(function (entry) {
+            const bid = parseInt(entry[0], 10), amt = Number(entry[1]);
+            if (!isNaN(bid) && amt > 0) {
+                battleRecords.push({
+                    ballId: bid, amount: -amt,
+                    timestamp: nowF.toISOString(),
+                    date: nowF.toISOString().slice(0,10),
+                    type: '捕捉消耗·' + spirit.name
+                });
+            }
+        });
         spirits = spirits.filter(s=>s.id!==spirit.id);
         if(activeTargetId===spirit.id) activeTargetId=null;
         refreshIdSequences();
         persistAll();
         fullRender();
-        alert(`成功捕捉 ${spirit.name}！`);
+        showToast('✅ 成功捕捉 ' + spirit.name + '（消耗已计入流水）');
     }
 
     function updateSeasonFilterSelect() {
@@ -2817,6 +3012,10 @@ id="externalLink">🔗 打开查询工具</a>
         if(currentSeasonFilter !== null) {
             filtered = capturedSpirits.filter(cap => cap.seasonId === currentSeasonFilter);
         }
+        // D 升级：按名字搜索
+        const csi = document.getElementById('capturedSearchInput');
+        const ckw = (csi && csi.value || '').trim().toLowerCase();
+        if (ckw) filtered = filtered.filter(cap => String(cap.name || '').toLowerCase().indexOf(ckw) >= 0);
         let groups = new Map();
         for(let cap of filtered) {
             let sid = cap.seasonId;
@@ -3115,7 +3314,7 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     function battleGet() {
-        if(!captureSnapshot){ alert("请先开始捕捉，才能记录获得"); return; }
+        ensureCaptureSnapshot();
         let ballId = parseInt(document.getElementById("battleBallSelect").value);
         let amount = parseInt(document.getElementById("battleAmount").value);
         if(isNaN(amount) || amount <= 0) { alert("数量无效"); return; }
@@ -3130,11 +3329,62 @@ id="externalLink">🔗 打开查询工具</a>
         lastCaptureStock = { ...inventory };
         persistAll();
         fullRender();
-        alert(`获得 ${amount} 个 ${ballTypes.find(b=>b.id===ballId)?.name}`);
+        showToast('✨ 获得 ' + amount + ' 个 ' + (ballTypes.find(b=>b.id===ballId)?.name||'球'));
+    }
+
+    // H 升级：批量获得——表格一次录多行（球种 + 数量）
+    function showBatchBattleGetDialog() {
+        ensureCaptureSnapshot();
+        const modal = document.createElement('div'); modal.className = 'modal';
+        const ballOpts = ballTypes.map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('');
+        const rowHtml = () => `<div class="bbg-row" style="display:flex; gap:8px; margin-bottom:8px;">
+            <select class="bbg-ball" style="flex:2">${ballOpts}</select>
+            <input type="number" class="bbg-amt" value="1" min="1" style="flex:1">
+            <button type="button" class="bbg-del small">✖</button>
+        </div>`;
+        modal.innerHTML = `<div class="modal-content" style="max-width:440px;">
+            <h3 style="margin-top:0;">批量获得咕噜球</h3>
+            <p style="font-size:0.74rem; color:#5a7a4a;">每行填一个球种和数量，一次提交多条：</p>
+            <div id="bbgRows" style="max-height:320px; overflow:auto;">${rowHtml()}</div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <button id="bbgAddRow" class="small">＋ 加一行</button>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:14px;">
+                <button id="bbgConfirm" class="primary">确认获得</button>
+                <button id="bbgCancel">取消</button>
+            </div>
+        </div>`;
+        document.body.appendChild(modal);
+        const rowsBox = modal.querySelector('#bbgRows');
+        modal.querySelector('#bbgAddRow').onclick = function () { rowsBox.insertAdjacentHTML('beforeend', rowHtml()); };
+        rowsBox.addEventListener('click', function (e) {
+            if (e.target.classList.contains('bbg-del')) {
+                const row = e.target.closest('.bbg-row');
+                if (rowsBox.querySelectorAll('.bbg-row').length > 1) row.remove();
+            }
+        });
+        modal.querySelector('#bbgConfirm').onclick = function () {
+            const rows = rowsBox.querySelectorAll('.bbg-row');
+            let ok = 0, invalid = 0;
+            const now = new Date();
+            rows.forEach(function (row) {
+                const bid = parseInt(row.querySelector('.bbg-ball').value, 10);
+                const amt = parseInt(row.querySelector('.bbg-amt').value, 10);
+                if (isNaN(bid) || isNaN(amt) || amt <= 0) { invalid++; return; }
+                inventory[bid] = (inventory[bid] || 0) + amt;
+                battleRecords.push({ ballId: bid, amount: amt, timestamp: now.toISOString(),
+                    date: now.toISOString().slice(0,10), type: '战斗/购买' });
+                ok++;
+            });
+            if (ok) { lastCaptureStock = { ...inventory }; persistAll(); fullRender(); }
+            modal.remove();
+            showToast('已批量获得 ' + ok + ' 条' + (invalid ? '（' + invalid + ' 行无效已跳过）' : ''), ok === 0);
+        };
+        modal.querySelector('#bbgCancel').onclick = function () { modal.remove(); };
     }
 
     function openSynthesisDialog() {
-        if(!captureSnapshot){ alert("请先开始捕捉，才能记录合成增量"); return; }
+        ensureCaptureSnapshot();
         const normalBall = ballTypes.find(b=>b.name === "普通咕噜球");
         if(!normalBall) { alert("未找到普通咕噜球"); return; }
         const normalStock = inventory[normalBall.id] || 0;
@@ -3184,9 +3434,24 @@ id="externalLink">🔗 打开查询工具</a>
             else logDiv.innerHTML = filtered.slice().reverse().map(rec=>{
                 let ball = ballTypes.find(b=>b.id===rec.ballId);
                 let timeStr = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString() : "";
-                return `<div class="log-entry">+${rec.amount} ${ball?.name||"球"} (${timeStr}) ${rec.type||""}</div>`;
+                const amt = Number(rec.amount) || 0;
+                // F 升级：负数=捕捉消耗，用减号 + 棕色显示，与正向获得区分
+                const sign = amt < 0 ? '−' : '+';
+                const color = amt < 0 ? '#a8622f' : '';
+                return `<div class="log-entry"${color ? ' style="color:'+color+'"' : ''}>${sign}${Math.abs(amt)} ${ball?.name||"球"} (${timeStr}) ${rec.type||""}</div>`;
             }).join('');
         }
+    }
+
+    // I 升级：首次记录消耗/获球时若还没快照，用当前库存自动建立基准，
+    // 不再强制用户先点「开始捕捉」。主动点「开始捕捉」仍会清空当日流水。
+    function ensureCaptureSnapshot() {
+        if (captureSnapshot && lastCaptureStock) return;
+        captureSnapshot = { ...inventory };
+        lastCaptureStock = { ...inventory };
+        if (!captureStartDate) captureStartDate = new Date().toISOString();
+        persistAll();
+        showToast('已按当前库存自动建立捕捉基准，可直接记录消耗');
     }
 
     function startCapture() {
@@ -3686,11 +3951,16 @@ id="externalLink">🔗 打开查询工具</a>
                     unknownRecords,
                     battleRecords,
                     growthData,
+                    // 库存快照：消耗推算的基准，必须随备份一起走，否则导入后球数会算错
+                    captureSnapshot,
+                    lastCaptureStock,
+                    captureStartDate,
                     settings: {
                         settingRoundBalls,
                         settingPeople,
                         settingBallsPerSpirit,
-                        currentSeasonId
+                        currentSeasonId,
+                        skippedUpdateVersion: localStorage.getItem(SKIP_VERSION_KEY) || ''
                     },
                     exportTime: new Date().toISOString()
                 }));
@@ -4076,8 +4346,36 @@ id="externalLink">🔗 打开查询工具</a>
             if(tab.dataset.display === currentDisplayGroup) tab.classList.add('active');
         });
         document.getElementById("unknownCount").innerText = unknownRecords.length;
+        updateUnknownAlert();
         initSidebar();
         renderGrowthPlan();
+    }
+
+    // E 升级：顶部常驻「有 N 条未知记录待确认」提醒，点了跳到已捕捉页的未知记录区
+    function updateUnknownAlert() {
+        const el = document.getElementById('topUnknownAlert');
+        if (!el) return;
+        const pending = (unknownRecords || []).filter(u => {
+            // 没有 final 类型消耗记录的都算「待最终确认」
+            return !(u.consumptionLogs || []).some(log => log.type === 'final');
+        }).length;
+        if (pending > 0) {
+            el.style.display = '';
+            el.textContent = '⚠️ 有 ' + pending + ' 条未知捕捉待确认（点此处理，避免精灵重复统计）';
+            el.onclick = function () {
+                // 切到 tab2 已捕捉
+                document.querySelectorAll('.nav-item').forEach(function (n) {
+                    if (n.dataset.tab === 'tab2') n.click();
+                });
+                setTimeout(function () {
+                    const card = document.getElementById('card-unknown-list') || document.getElementById('unknownListContainer');
+                    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 120);
+            };
+        } else {
+            el.style.display = 'none';
+            el.onclick = null;
+        }
     }
 
     function bindActions(){
@@ -4092,6 +4390,8 @@ id="externalLink">🔗 打开查询工具</a>
             syncWithPreset();
             fullRender();
         });
+        // G 升级：批量从预设库添加待捕捉精灵
+        document.getElementById("batchAddSpiritBtn")?.addEventListener("click", showBatchAddSpiritsDialog);
         document.getElementById("addBallTypeBtn")?.addEventListener("click",()=>{ let name=prompt("球种名"); if(!name)return; let a1=prompt("属性1","草"); if(!a1)a1="草"; let a2=prompt("属性2(可选)",""); let nid=nextBallId++; ballTypes.push({id:nid,name,attr1:a1,attr2:a2||""}); inventory[nid]=0; persistAll(); fullRender(); });
         document.getElementById("addPresetSpiritBtn")?.addEventListener("click",()=>{
             const modal = document.createElement('div'); modal.className = 'modal';
@@ -4208,11 +4508,16 @@ id="externalLink">🔗 打开查询工具</a>
             };
         });
         document.getElementById("addCapturedRecordBtn")?.addEventListener("click",showAddCapturedRecordDialog);
+        document.getElementById("batchSeasonCapturedBtn")?.addEventListener("click",()=>showBatchCapturedDialog('season'));
+        document.getElementById("batchDeleteCapturedBtn")?.addEventListener("click",()=>showBatchCapturedDialog('delete'));
         document.getElementById("doBattleGetBtn")?.addEventListener("click",battleGet);
+        document.getElementById("batchBattleGetBtn")?.addEventListener("click", showBatchBattleGetDialog);
         document.getElementById("synthesisInWarehouseBtn")?.addEventListener("click",openSynthesisDialog);
         document.getElementById("confirmTargetBtn")?.addEventListener("click",setActiveTarget);
         document.getElementById("clearTargetBtn")?.addEventListener("click",clearActiveTarget);
         document.getElementById("presetSearchInput")?.addEventListener("input",()=>renderPresetSpirits());
+        document.getElementById("spiritSearchInput")?.addEventListener("input",()=>renderSpiritGrid());
+        document.getElementById("capturedSearchInput")?.addEventListener("input",()=>renderCapturedList());
         document.getElementById("globalSetNeedBtn")?.addEventListener("click",globalSetNeed);
         document.getElementById("toggleDeleteModeBtn")?.addEventListener("click",toggleDeleteMode);
         document.getElementById("confirmDeleteSpiritsBtn")?.addEventListener("click",confirmDeleteSpirits);
@@ -4272,6 +4577,19 @@ id="externalLink">🔗 打开查询工具</a>
     }
 
     function escapeHtml(str){ return String(str).replace(/[&<>]/g,function(m){if(m==='&')return '&amp;';if(m==='<')return '&lt;';if(m==='>')return '&gt;';return m;}); }
+
+    // 非阻塞轻提示：替代大量 alert，连续操作不再被打断
+    function showToast(msg, isErr) {
+        try {
+            let t = document.getElementById('appToast');
+            if (!t) { t = document.createElement('div'); t.id = 'appToast'; document.body.appendChild(t); }
+            t.className = 'app-toast' + (isErr ? ' err' : '');
+            t.textContent = msg;
+            t.style.opacity = '1';
+            clearTimeout(t._timer);
+            t._timer = setTimeout(function () { t.style.opacity = '0'; }, 2600);
+        } catch (e) { /* 提示失败不影响业务 */ }
+    }
 
     // =========================================================================
     // 软件自动更新
@@ -4950,6 +5268,26 @@ id="externalLink">🔗 打开查询工具</a>
                 ? '已更新：新增 ' + added.seasons + ' 个赛季、' + added.spirits
                   + ' 个异色精灵（原有数据未改动）'
                 : '未添加任何内容（已标记本批数据为已读，下次检查不会再提示）';
+        }
+        // K 升级：新赛季导入后在顶部非阻塞提示，可一键跳到预设库添加新赛季精灵
+        if (added.seasons > 0) {
+            const sa = document.getElementById('topSeasonAlert');
+            if (sa) {
+                sa.style.display = '';
+                sa.innerHTML = '🆕 新赛季数据已就绪（新增 ' + added.seasons + ' 个赛季）——'
+                    + '<a href="javascript:void(0)" id="goAddNewSeasonSpirit" style="color:#185fa5; text-decoration:underline;">去预设库添加新精灵</a>';
+                const link = sa.querySelector('#goAddNewSeasonSpirit');
+                if (link) link.onclick = function () {
+                    document.querySelectorAll('.nav-item').forEach(function (n) {
+                        if (n.dataset.tab === 'tab4') n.click();
+                    });
+                    setTimeout(function () {
+                        const card = document.getElementById('card-preset');
+                        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 120);
+                    sa.style.display = 'none';
+                };
+            }
         }
     }
 
@@ -6555,6 +6893,16 @@ class PythonAPI(QObject):
             localStorage.setItem('unknown_final', JSON.stringify({json.dumps(data.get('unknownRecords', []))}));
             localStorage.setItem('battle_rec_final', JSON.stringify({json.dumps(data.get('battleRecords', []))}));
             localStorage.setItem('growth_plan_data', JSON.stringify({json.dumps(data.get('growthData', {}))}));
+            // 库存快照：新备份带就原样恢复，老备份没有则清空（导入后需重新「开始捕捉」）
+            var snap = {json.dumps(data.get('captureSnapshot', None))};
+            var lastStock = {json.dumps(data.get('lastCaptureStock', None))};
+            var capStart = {json.dumps(data.get('captureStartDate', None))};
+            localStorage.setItem('snap_final', snap === null ? 'null' : JSON.stringify(snap));
+            localStorage.setItem('laststock_final', lastStock === null ? 'null' : JSON.stringify(lastStock));
+            if (capStart === null) localStorage.removeItem('start_date_final');
+            else localStorage.setItem('start_date_final', JSON.stringify(capStart));
+            // 记录本次导入是否恢复了快照，供 loadData 后提示用户
+            localStorage.setItem('just_imported_snapshot', (snap === null || lastStock === null) ? 'reset' : 'restored');
             location.reload();
             """
             self.view.page().runJavaScript(js)
