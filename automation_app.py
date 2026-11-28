@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -504,6 +504,75 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             padding: 20px;
             max-height: 80vh;
             overflow-y: auto;
+        }
+        /* 发布前核对：分组勾选清单 */
+        .pick-sec {
+            border: 1px solid #dce8d1;
+            border-radius: 14px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            background: #fbfdf8;
+        }
+        .pick-sec h4 {
+            margin: 0 0 6px;
+            font-size: 0.85rem;
+            color: #2b6e2f;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .pick-sec h4 button {
+            font-size: 0.68rem;
+            padding: 3px 9px;
+            border-radius: 12px;
+            border: 1px solid #cfe0bf;
+            background: #fff;
+            color: #3d7a24;
+            cursor: pointer;
+        }
+        .pick-list { max-height: 148px; overflow-y: auto; }
+        .pick-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 5px 2px;
+            font-size: 0.78rem;
+            line-height: 1.35;
+            cursor: pointer;
+        }
+        .pick-row input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            flex: none;
+            margin: 2px 0 0;
+            padding: 0;
+            border: 1px solid #cbdcc0;
+            border-radius: 4px;
+            accent-color: #4c9e2c;
+        }
+        .pick-row small {
+            display: block;
+            color: #7a8a70;
+            font-size: 0.68rem;
+        }
+        .pick-row.off { opacity: 0.45; cursor: not-allowed; }
+        .pick-summary {
+            font-size: 0.76rem;
+            color: #2b6e2f;
+            background: #eaf4e3;
+            border-radius: 10px;
+            padding: 8px 10px;
+            line-height: 1.5;
+        }
+        /* 汇总与按钮始终贴在弹窗底部，清单再长也不用滚到底才能确认 */
+        .pick-footer {
+            position: sticky;
+            bottom: -20px;
+            background: #fff;
+            padding: 10px 0 4px;
+            margin-top: 8px;
+            border-top: 1px solid #eef3e8;
         }
         .app-toast {
             /* 同样避开 translateX(-50%) 的半像素：用左右定位 + margin auto 居中，文字更锐利 */
@@ -4899,8 +4968,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         });
     }
 
-    // 上传前先做本地检查，再拉远端做覆盖对比，最后弹窗确认——上传是整文件覆盖，
-    // 不是追加：远端有、本地没有的内容会被删掉，所以要先让发布者看清楚再确认
+    // 上传第一步：填了 Token 之后，先进入「勾选要发布什么」的兜底确认，
+    // 再由 continuePublishWithPack 做覆盖对比和最终确认
     function publishDataPack() {
         if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
         const tokenEl = document.getElementById('publishToken');
@@ -4912,14 +4981,21 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             return;
         }
         localStorage.setItem(PUBLISH_TOKEN_KEY, token);
+        showPublishPicker('upload');
+    }
 
-        const pack = buildDataPack();
-        if (!pack.seasons.length && !pack.spirits.length && !pack.balls.length) {
-            if (st) st.textContent = '本地没有可发布的内容，已取消上传';
-            alert('本地还没有赛季 / 精灵 / 球种，用户端收不到内容。\n请先维护好赛季、预设精灵库或咕噜球仓库再上传。');
+    // 上传第二步：发布者已勾选好内容，拉远端做覆盖对比，最后弹窗确认。
+    // 上传是整文件覆盖，不是追加：远端有、本次没勾选的内容会被删掉。
+    function continuePublishWithPack(pack) {
+        const st = document.getElementById('publishStatus');
+        if (!pack.seasons.length && !pack.spirits.length && !pack.balls.length && !pack.growthSettings) {
+            if (st) st.textContent = '本次没有勾选任何内容，已取消上传';
+            showToast('本次没有勾选任何内容，已取消上传', true);
             return;
         }
         const noSeason = pack.spirits.filter(p => !p.season).length;
+        // 通知外部「本次最终选中的包是什么」（自动化测试 / 将来接别的导出方式用，正常使用时无副作用）
+        document.dispatchEvent(new CustomEvent('publishPackReady', { detail: { mode: 'upload', pack: pack } }));
         // 拉取远端当前数据包，给确认弹窗做「覆盖对比」展示（拉不到也允许继续，只做提示）
         lastPendingPublishPack = pack;
         lastPendingNoSeason = noSeason;
@@ -4958,14 +5034,14 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                     + (goneBalls.length > 6 ? ' 等 ' + goneBalls.length + ' 个' : '');
                 removeInfo = '<p style="font-size:0.75rem; color:#a8322f; background:#fdf0ee;'
                     + ' border:1px solid #f0d2c4; border-radius:10px; padding:8px 10px; line-height:1.5;">'
-                    + '警告：以下内容<b>远端有、本地没有</b>，上传后将从远端删除：<br>'
+                    + '警告：以下内容<b>远端有、本次没勾选</b>，上传后将从远端删除：<br>'
                     + (goneSpirits.length ? '精灵：' + names + '<br>' : '')
                     + (goneSeasons.length ? '赛季：' + sn + '<br>' : '')
                     + (goneBalls.length ? '球种：' + bn : '')
                     + '</p>';
             } else {
                 removeInfo = '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
-                    + '本地已包含远端全部内容，覆盖后不会丢失任何精灵 / 球种。</p>';
+                    + '本次勾选的内容已覆盖远端全部条目，覆盖后不会丢失任何精灵 / 球种。</p>';
             }
         } else {
             remoteInfo = '<p style="font-size:0.75rem; color:#a8622f; line-height:1.5;">'
@@ -4978,7 +5054,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             + '<h3 style="margin-top:0;">上传数据包到 GitHub</h3>'
             + '<p style="font-size:0.78rem; color:#5a7a4a; line-height:1.6;">'
             + '本次数据包：<b>' + pack.seasons.length + '</b> 个赛季、<b>' + pack.spirits.length + '</b> 只精灵、<b>'
-            + (pack.balls || []).length + '</b> 个球种（只含名字/属性/是否赛季球，<b>不含库存</b>）+ 成长计划设置。<br>'
+            + (pack.balls || []).length + '</b> 个球种（只含名字/属性/是否赛季球，<b>不含库存</b>）'
+            + (pack.growthSettings ? ' + <b>成长计划设置</b>' : '（本次不含成长计划设置）') + '。<br>'
             + '上传方式：<b>覆盖</b> —— 远端 <b>data/game_data.json</b>（分支 main）会被本地数据完整替换，不是追加。</p>'
             + remoteInfo + removeInfo
             + (noSeason
@@ -4988,8 +5065,9 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                   + '这些精灵<b>不会推送给用户</b>。</p>'
                 : '')
             + '<p style="font-size:0.75rem; color:#5a7a4a; line-height:1.5;">'
-            + '用户端只会收到<b>新赛季</b>及其中的精灵、<b>本地缺的球种</b>和新版成长计划设置；'
-            + '老赛季的改动、已有球种的改动不会推送给普通用户。</p>'
+            + '用户端只会收到<b>新赛季</b>及其中的精灵、<b>本地缺的球种</b>'
+            + (pack.growthSettings ? '和新版成长计划设置' : '')
+            + '；老赛季的改动、已有球种的改动不会推送给普通用户。</p>'
             + '<div style="display:flex; gap:8px; margin-top:14px;">'
             + '<button id="confirmPublishBtn" class="primary">确认覆盖上传</button>'
             + '<button id="cancelPublishBtn" style="background:#ffffff; border:1.5px solid #cfe0bf;'
@@ -5625,47 +5703,218 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 
     // 把本地当前的赛季 + 预设精灵库 + 球种 + 成长计划设置导出成数据包（给发布者用）
     // 注意：球种只带「名字 / 属性 / 是否赛季球」，**不带任何库存数量**（那是玩家个人数据）
-    function buildDataPack() {
+    // selection 可选，形如 { seasons:[赛季名], spirits:[精灵名], balls:[球种名], growth:true }。
+    // 不传时保持旧行为：全部导出。传了就只导出勾选的内容。
+    function buildDataPack(selection) {
         const seasonNameById = {};
         seasons.forEach(s => { seasonNameById[s.id] = s.name; });
-        return {
+        const picked = (name, key) => {
+            if (!selection) return true;
+            const list = selection[key];
+            if (list === undefined || list === null) return true;
+            return typeof list.has === 'function' ? list.has(name) : list.indexOf(name) >= 0;
+        };
+        const pack = {
             data_version: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             app: '异色逮捕计划',
             schema: 2,
             note: '赛季、预设精灵库、咕噜球仓库球种（不含库存）与成长计划设置。由软件「设置 → 软件更新 → 导出数据包」生成，覆盖仓库 data/game_data.json 即可发布。',
-            seasons: seasons.map(s => ({
+            seasons: seasons.filter(s => picked(s.name, 'seasons')).map(s => ({
                 name: s.name,
                 order: s.order || 0,
                 startDate: s.startDate || '',
                 endDate: s.endDate || ''
             })),
-            spirits: presetSpirits.map(p => ({
+            spirits: presetSpirits.filter(p => {
+                if (!picked(p.name, 'spirits')) return false;
+                // 所属赛季没被勾选的精灵一并去掉，避免发出挂在不存在赛季下的孤儿精灵
+                const sid = p.defaultSeasonId;
+                if (sid !== null && sid !== undefined && seasonNameById[sid]
+                    && !picked(seasonNameById[sid], 'seasons')) return false;
+                return true;
+            }).map(p => ({
                 name: p.name,
                 attrs: p.attrs || [],
                 type: p.type || 'normal',
                 season: (p.defaultSeasonId !== null && p.defaultSeasonId !== undefined)
                     ? (seasonNameById[p.defaultSeasonId] || null) : null
             })),
-            balls: ballTypes.map(b => ({
+            balls: ballTypes.filter(b => picked(b.name, 'balls')).map(b => ({
                 name: b.name,
                 attr1: b.attr1 || '',
                 attr2: b.attr2 || '',
                 isSeason: !!b.isSeason
-            })),
-            growthSettings: {
+            }))
+        };
+        if (!selection || selection.growth !== false) {
+            pack.growthSettings = {
                 materialsPerRun: growthData.materialsPerRun,
                 runsPerWeek: growthData.runsPerWeek,
                 sealsPerRun: growthData.sealsPerRun
-            }
-        };
+            };
+        }
+        return pack;
     }
 
-    function exportDataPack() {
-        const pack = buildDataPack();
+    // ===== 发布前的兜底核对：先逐项勾选要写进 game_data.json 的内容 =====
+    // 导出和上传都要过这一关。上传是整文件覆盖，没勾选的内容会从远端删除，
+    // 所以必须让发布者亲眼看到清单、主动剔除不需要的内容后再继续。
+    function showPublishPicker(mode) {
+        const full = buildDataPack();
+        if (!full.seasons.length && !full.spirits.length && !full.balls.length && !full.growthSettings) {
+            showToast('本地没有可发布的内容，请先维护赛季 / 精灵 / 球种 / 成长计划设置', true);
+            return;
+        }
+        const old = document.getElementById('publishPickerModal');
+        if (old) old.remove();
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'publishPickerModal';
+        const attr = v => escapeHtml(v).replace(/"/g, '&quot;');
+        const row = (kind, key, title, sub, seasonKey, checked, disabledBySeason) =>
+            '<label class="pick-row' + (disabledBySeason ? ' off' : '') + '"'
+            + (disabledBySeason ? ' title="所属赛季未勾选，本条不会写入数据包"' : '')
+            + '><input type="checkbox" data-kind="' + kind + '" data-key="' + attr(key) + '"'
+            + (seasonKey ? ' data-season="' + attr(seasonKey) + '"' : '')
+            + (disabledBySeason ? ' disabled' : '')
+            + (checked && !disabledBySeason ? ' checked' : '') + '>'
+            + '<span><b>' + escapeHtml(title) + '</b>' + (sub ? '<small>' + sub + '</small>' : '')
+            + '</span></label>';
+        const section = (kind, icon, title, rows, note) =>
+            '<div class="pick-sec"><h4><span>' + icon + ' ' + title + '（' + rows.length + '）</span>'
+            + '<button type="button" data-toggle="' + kind + '">全不选</button></h4>'
+            + (note ? '<div style="font-size:0.68rem;color:#7a8a70;margin-bottom:4px;">' + note + '</div>' : '')
+            + '<div class="pick-list">' + (rows.length ? rows.join('')
+                : '<div style="font-size:0.72rem;color:#8a9980;">（本地没有内容）</div>') + '</div></div>';
+
+        const seasonRows = full.seasons.map(s => row('season', s.name, s.name,
+            (s.startDate || s.endDate) ? escapeHtml((s.startDate || '?') + ' ~ ' + (s.endDate || '?')) : '', '', true));
+        const spiritRows = full.spirits.map(p => {
+            const attrs = (p.attrs || []).join(' + ');
+            const sub = (attrs ? escapeHtml(attrs) + '　' : '')
+                + (p.season ? '赛季：' + escapeHtml(p.season) : '<b style="color:#a8622f;">未设赛季（用户端不会收到）</b>');
+            return row('spirit', p.name, p.name, sub, p.season || '', true, false);
+        });
+        const ballRows = full.balls.map(b => {
+            const attrs = [b.attr1, b.attr2].filter(a => a && a !== '无').join(' + ') || '无属性';
+            return row('ball', b.name, b.name, escapeHtml(attrs) + (b.isSeason ? '　🌞 赛季球' : ''), '', true);
+        });
+        let growthHtml = '';
+        if (full.growthSettings) {
+            const g = full.growthSettings;
+            growthHtml = '<div class="pick-sec"><h4><span>📈 成长计划设置（1）</span></h4>'
+                + '<label class="pick-row"><input type="checkbox" id="pickGrowth" checked>'
+                + '<span><b>成长计划参数</b><small>每次材料 ' + escapeHtml(g.materialsPerRun)
+                + ' / 每周 ' + escapeHtml(g.runsPerWeek) + ' 次 / 每次 ' + escapeHtml(g.sealsPerRun)
+                + ' 印记</small></span></label></div>';
+        }
+
+        modal.innerHTML = '<div class="modal-content" style="max-width:560px;">'
+            + '<h3 style="margin-top:0;">核对要发布的数据</h3>'
+            + '<p style="font-size:0.75rem;color:#5a7a4a;line-height:1.6;margin:0 0 10px;">'
+            + '请逐项勾选本次要写入 <b>data/game_data.json</b> 的内容；取消勾选的内容不会出现在数据包里。'
+            + (mode === 'upload'
+                ? '上传是<b>整文件覆盖</b>，远端有而这里没勾选的内容会被<b>删除</b>，请仔细核对。'
+                : '导出到本地文件，不影响远端数据。')
+            + '</p>'
+            + section('season', '🏆', '赛季', seasonRows, '取消某个赛季时，属于它的精灵会自动一并剔除。')
+            + section('spirit', '✨', '预设精灵库', spiritRows, '未设赛季的精灵不会推送给用户；所属赛季被取消时会自动剔除。')
+            + section('ball', '🎒', '咕噜球球种', ballRows, '只带名字 / 属性 / 是否赛季球，<b>不含库存</b>。')
+            + growthHtml
+            + '<div class="pick-footer">'
+            + '<div class="pick-summary" id="pickSummary"></div>'
+            + '<div style="display:flex;gap:8px;margin-top:12px;">'
+            + '<button id="pickConfirmBtn" class="primary">'
+            + (mode === 'upload' ? '下一步：核对覆盖内容' : '生成数据包文件') + '</button>'
+            + '<button id="pickCancelBtn" style="background:#ffffff;border:1.5px solid #cfe0bf;'
+            + 'color:#2b6e2f;border-radius:14px;padding:8px 16px;cursor:pointer;font-weight:600;">取消</button>'
+            + '</div></div></div>';
+        document.body.appendChild(modal);
+
+        function updateSummary() {
+            const count = kind => modal.querySelectorAll('input[data-kind="' + kind + '"]:checked').length;
+            const gCb = modal.querySelector('#pickGrowth');
+            const growthOn = !!(gCb && gCb.checked);
+            const sum = modal.querySelector('#pickSummary');
+            if (sum) {
+                sum.innerHTML = '已选择：赛季 <b>' + count('season') + '</b> / ' + full.seasons.length
+                    + '、精灵 <b>' + count('spirit') + '</b> / ' + full.spirits.length
+                    + '、球种 <b>' + count('ball') + '</b> / ' + full.balls.length
+                    + '、成长计划设置 <b>' + (growthOn ? '包含' : '不包含') + '</b>。';
+            }
+            modal.querySelectorAll('button[data-toggle]').forEach(btn => {
+                const kind = btn.dataset.toggle;
+                const boxes = Array.from(modal.querySelectorAll('input[data-kind="' + kind + '"]'))
+                    .filter(b => !b.disabled);
+                btn.textContent = (boxes.length && boxes.every(b => b.checked)) ? '全不选' : '全选';
+            });
+        }
+        modal.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', function () {
+                // 赛季取消 → 该赛季的精灵自动剔除；重新勾选 → 恢复之前的勾选状态
+                if (cb.dataset.kind === 'season') {
+                    Array.from(modal.querySelectorAll('input[data-kind="spirit"][data-season]'))
+                        .filter(s => s.dataset.season === cb.dataset.key)
+                        .forEach(s => {
+                            if (!cb.checked) {
+                                s.dataset.prevChecked = s.checked ? '1' : '0';
+                                s.checked = false;
+                                s.disabled = true;
+                                s.parentNode.classList.add('off');
+                            } else {
+                                s.disabled = false;
+                                s.checked = s.dataset.prevChecked !== '0';
+                                s.parentNode.classList.remove('off');
+                                delete s.dataset.prevChecked;
+                            }
+                        });
+                }
+                updateSummary();
+            });
+        });
+        modal.querySelectorAll('button[data-toggle]').forEach(btn => {
+            btn.onclick = function () {
+                const boxes = Array.from(modal.querySelectorAll('input[data-kind="' + btn.dataset.toggle + '"]'))
+                    .filter(b => !b.disabled);
+                const allOn = boxes.length && boxes.every(b => b.checked);
+                boxes.forEach(b => {
+                    b.checked = !allOn;
+                    b.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+                updateSummary();
+            };
+        });
+        modal.querySelector('#pickCancelBtn').onclick = function () { modal.remove(); };
+        modal.querySelector('#pickConfirmBtn').onclick = function () {
+            const names = kind => Array.from(modal.querySelectorAll('input[data-kind="' + kind + '"]:checked'))
+                .map(cb => cb.dataset.key);
+            const gCb = modal.querySelector('#pickGrowth');
+            const pack = buildDataPack({
+                seasons: names('season'),
+                spirits: names('spirit'),
+                balls: names('ball'),
+                growth: !!(gCb && gCb.checked)
+            });
+            if (!pack.seasons.length && !pack.spirits.length && !pack.balls.length && !pack.growthSettings) {
+                showToast('请至少勾选一项内容', true);
+                return;
+            }
+            modal.remove();
+            if (mode === 'upload') continuePublishWithPack(pack);
+            else doExportDataPack(pack);
+        };
+        updateSummary();
+    }
+
+    function exportDataPack() { showPublishPicker('export'); }
+
+    function doExportDataPack(pack) {
+        document.dispatchEvent(new CustomEvent('publishPackReady', { detail: { mode: 'export', pack: pack } }));
         const st = document.getElementById('dataSyncStatus');
         if (st) st.textContent = '已生成数据包：' + pack.spirits.length + ' 个精灵、'
-            + pack.seasons.length + ' 个赛季、' + pack.balls.length + ' 个球种（不含库存）、成长计划设置';
+            + pack.seasons.length + ' 个赛季、' + pack.balls.length + ' 个球种（不含库存）'
+            + (pack.growthSettings ? '、成长计划设置' : '');
         if (pythonAPI) pythonAPI.exportDataPack(JSON.stringify(pack, null, 2));
     }
 
