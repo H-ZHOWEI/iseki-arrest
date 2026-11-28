@@ -1,9 +1,9 @@
 {
-  "version": "1.7.0",
+  "version": "1.7.1",
   "download_url": "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/dist/%E5%BC%82%E8%89%B2%E9%80%AE%E6%8D%95%E8%AE%A1%E5%88%92.exe",
-  "notes": "v1.7.0：导出数据包 / 上传 GitHub 前新增「核对要发布的数据」兜底弹窗——赛季、预设精灵库、球种、成长计划设置逐项勾选，可剔除不需要的内容；取消赛季会自动剔除其精灵，全不选会被拦下，上传仍保留远端覆盖对比（两道保险）。详见 CHANGELOG.md 与 操作指引.md。",
+  "notes": "v1.7.1：上传数据包时先和远端比内容——完全一致就直接提示「无需重新上传」，不弹核对窗口；有差异才弹「核对要发布的数据」让你勾选（预检拿到的远端包缓存复用，不再二次请求）。v1.7.0 起发布前可逐项勾选要写入的数据。",
   "mandatory": false,
-  "sha256": "ebe486301e06fcbbc0c28ee6a61f6f47ef4c16813f57548b76dfa32099f36677",
+  "sha256": "97c4255c82aacc306cd1eb248780bc77549abb339481094cde7defec7423fbb8",
   "pub_date": "2026-11-28",
-  "size": 87318444
+  "size": 87319363
 }

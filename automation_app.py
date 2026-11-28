@@ -59,7 +59,7 @@ import urllib.error
 import urllib.parse
 
 # ----------------------------- 版本号（单一来源，自动更新会读取此处）--------------------------------
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 DEFAULT_UPDATE_REPO = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/version.json"  # 默认更新清单（仓库根目录 version.json，模仿「喵想奇记」把 exe 提交进仓库 dist/ 的方式）
 DEFAULT_DATA_URL = "https://raw.githubusercontent.com/H-ZHOWEI/iseki-arrest/main/data/game_data.json"  # 游戏数据包（预设精灵库 + 赛季），检查更新时顺带同步
 GITHUB_API = "https://api.github.com"  # 发布者上传数据包用（单独定义便于测试指向本地 mock）
@@ -4935,6 +4935,8 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     let pendingPublishPack = null;
     let lastPendingPublishPack = null;   // 等待远端对比结果、即将弹确认窗的数据包
     let lastPendingNoSeason = 0;
+    let publishPrecheck = null;          // 上传前预检用的「本地完整包」（未勾选过滤）
+    let publishRemoteCache = null;       // 预检时拉到的远端包 {repo, remote}，勾选后直接复用，不再二次请求
 
     function isPublisherMode() { return localStorage.getItem(PUBLISHER_KEY) === '1'; }
 
@@ -4968,8 +4970,31 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         });
     }
 
-    // 上传第一步：填了 Token 之后，先进入「勾选要发布什么」的兜底确认，
-    // 再由 continuePublishWithPack 做覆盖对比和最终确认
+    // 判断两个数据包的「内容」是否一致（忽略 data_version / updated_at / note 这类时间戳字段，
+    // 只比赛季、精灵、球种、成长设置；顺序不同视为不同，因为顺序也会发布出去）
+    function dataPackContentEqual(a, b) {
+        const norm = pack => {
+            if (!pack) return null;
+            const seasons = {};
+            (pack.seasons || []).forEach(s => { seasons[s.name] = [s.order || 0, s.startDate || '', s.endDate || '']; });
+            const spirits = {};
+            (pack.spirits || []).forEach(p => { spirits[p.name] = [(p.attrs || []).join(','), p.type || 'normal', p.season || '']; });
+            const balls = {};
+            (pack.balls || []).forEach(x => { balls[x.name] = [x.attr1 || '', x.attr2 || '', !!x.isSeason]; });
+            let growth = null;
+            if (pack.growthSettings && typeof pack.growthSettings === 'object') {
+                growth = [String(pack.growthSettings.materialsPerRun),
+                          String(pack.growthSettings.runsPerWeek),
+                          String(pack.growthSettings.sealsPerRun)];
+            }
+            return JSON.stringify([seasons, spirits, balls, growth]);
+        };
+        return norm(a) === norm(b);
+    }
+
+    // 上传第一步：填了 Token 之后，先拉远端做「内容是否一致」预检——
+    // 本地和远端完全一致时（用户本身已经有这些数据）不弹任何窗口，直接提示无需上传；
+    // 有差异才进入「勾选要发布什么」的兜底确认，再由 continuePublishWithPack 做最终确认
     function publishDataPack() {
         if (!pythonAPI) { alert('程序还没就绪，请稍后再试'); return; }
         const tokenEl = document.getElementById('publishToken');
@@ -4981,10 +5006,26 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             return;
         }
         localStorage.setItem(PUBLISH_TOKEN_KEY, token);
-        showPublishPicker('upload');
+
+        const full = buildDataPack();
+        if (!full.seasons.length && !full.spirits.length && !full.balls.length && !full.growthSettings) {
+            if (st) st.textContent = '本地没有可发布的内容，已取消上传';
+            alert('本地还没有赛季 / 精灵 / 球种，用户端收不到内容。\n请先维护好赛季、预设精灵库或咕噜球仓库再上传。');
+            return;
+        }
+        publishPrecheck = full;
+        const repo = ((document.getElementById('updateGithubRepo') || {}).value || '').trim()
+                     || 'H-ZHOWEI/iseki-arrest';
+        if (st) st.textContent = '正在获取远端当前数据包做对比…';
+        try {
+            pythonAPI.previewRemotePack(repo, 'data/game_data.json', 'main');
+        } catch (e) {
+            publishRemoteCache = { repo: repo, remote: null };
+            showPublishPicker('upload');
+        }
     }
 
-    // 上传第二步：发布者已勾选好内容，拉远端做覆盖对比，最后弹窗确认。
+    // 上传第二步：发布者已勾选好内容，用预检时缓存的远端包做覆盖对比，最后弹窗确认。
     // 上传是整文件覆盖，不是追加：远端有、本次没勾选的内容会被删掉。
     function continuePublishWithPack(pack) {
         const st = document.getElementById('publishStatus');
@@ -4996,11 +5037,16 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         const noSeason = pack.spirits.filter(p => !p.season).length;
         // 通知外部「本次最终选中的包是什么」（自动化测试 / 将来接别的导出方式用，正常使用时无副作用）
         document.dispatchEvent(new CustomEvent('publishPackReady', { detail: { mode: 'upload', pack: pack } }));
+        const repo = ((document.getElementById('updateGithubRepo') || {}).value || '').trim()
+                     || 'H-ZHOWEI/iseki-arrest';
+        // 预检已经拉过远端就直接复用，避免同一分钟内重复请求
+        if (publishRemoteCache && publishRemoteCache.repo === repo) {
+            showPublishConfirm(pack, noSeason, publishRemoteCache.remote);
+            return;
+        }
         // 拉取远端当前数据包，给确认弹窗做「覆盖对比」展示（拉不到也允许继续，只做提示）
         lastPendingPublishPack = pack;
         lastPendingNoSeason = noSeason;
-        const repo = ((document.getElementById('updateGithubRepo') || {}).value || '').trim()
-                     || 'H-ZHOWEI/iseki-arrest';
         if (st) st.textContent = '正在获取远端当前数据包做对比…';
         try {
             pythonAPI.previewRemotePack(repo, 'data/game_data.json', 'main');
@@ -5081,12 +5127,31 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         };
     }
 
-    // 拉远端数据包的回调：拿到就带对比展示，拿不到也允许继续（弹窗里只做提示）
+    // 拉远端数据包的回调：
+    // · 上传预检阶段 → 本地与远端内容一致就直接提示「无需上传」，不弹任何窗口；
+    //   有差异才弹「核对要发布的数据」，并把远端包缓存下来给最终确认复用
+    // · 勾选后二次拉取（缓存失效时）→ 直接带对比展示
     function onRemotePackPreview(res) {
         const st = document.getElementById('publishStatus');
         if (st) st.textContent = '';
-        showPublishConfirm(lastPendingPublishPack, lastPendingNoSeason,
-            (res && res.status === 'ok' && res.pack) ? res.pack : null);
+        const remote = (res && res.status === 'ok' && res.pack) ? res.pack : null;
+        const repo = ((document.getElementById('updateGithubRepo') || {}).value || '').trim()
+                     || 'H-ZHOWEI/iseki-arrest';
+
+        if (publishPrecheck) {
+            const full = publishPrecheck;
+            publishPrecheck = null;
+            if (remote && dataPackContentEqual(full, remote)) {
+                if (st) st.textContent = '远端数据与本地完全一致，无需重新上传';
+                showToast('远端数据与本地完全一致，无需重新上传');
+                return;
+            }
+            publishRemoteCache = { repo: repo, remote: remote };
+            showPublishPicker('upload');
+            return;
+        }
+
+        showPublishConfirm(lastPendingPublishPack, lastPendingNoSeason, remote);
     }
 
     function doPublish(pack) {
